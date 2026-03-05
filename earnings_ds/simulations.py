@@ -41,6 +41,75 @@ def _row_sum_report(df: pd.DataFrame, name: str, enabled: bool) -> None:
         _dbg(f"[{name}] WARNING: row_sum outside [0,1] on {int(bad.sum())} days (showing first 5):\n{s[bad].head()}", enabled)
 
 
+def _expected_event_keys_from_signals(entries_long: pd.DataFrame, entries_short: pd.DataFrame) -> pd.MultiIndex:
+    long_idx = entries_long.stack()
+    long_idx = long_idx[long_idx].index
+
+    short_idx = entries_short.stack()
+    short_idx = short_idx[short_idx].index
+
+    if len(long_idx) == 0 and len(short_idx) == 0:
+        return pd.MultiIndex.from_arrays([[], []], names=["event_day", "ticker"])
+
+    both = long_idx.append(short_idx)
+    return both.unique().set_names(["event_day", "ticker"])
+
+
+def _trade_alignment_report(
+    trades: pd.DataFrame,
+    expected_keys: pd.MultiIndex,
+    enabled: bool,
+    max_examples: int = 5,
+) -> dict[str, float | int]:
+    if "Entry Timestamp" not in trades.columns or "Column" not in trades.columns:
+        _dbg("[trade alignment] missing required trade columns for alignment report", enabled)
+        return {
+            "expected": int(len(expected_keys)),
+            "actual": int(len(trades)),
+            "overlap": 0,
+            "overlap_ratio_expected": np.nan,
+            "overlap_ratio_actual": np.nan,
+        }
+
+    t = trades.copy()
+    t["event_day"] = pd.to_datetime(t["Entry Timestamp"]).dt.normalize()
+    t["ticker"] = t["Column"].astype(str)
+    actual_keys = pd.MultiIndex.from_frame(t[["event_day", "ticker"]]).unique()
+
+    overlap = expected_keys.intersection(actual_keys)
+    expected_only = expected_keys.difference(actual_keys)
+    actual_only = actual_keys.difference(expected_keys)
+
+    n_expected = len(expected_keys)
+    n_actual = len(actual_keys)
+    n_overlap = len(overlap)
+    overlap_ratio_expected = (n_overlap / n_expected) if n_expected else np.nan
+    overlap_ratio_actual = (n_overlap / n_actual) if n_actual else np.nan
+
+    _dbg(
+        "[trade alignment] "
+        f"expected={n_expected} actual={n_actual} overlap={n_overlap} "
+        f"overlap/expected={overlap_ratio_expected:.2%} overlap/actual={overlap_ratio_actual:.2%}",
+        enabled,
+    )
+
+    if enabled and max_examples:
+        if len(expected_only):
+            ex = [f"({d.date()}, {t})" for d, t in list(expected_only)[:max_examples]]
+            _dbg(f"[trade alignment] expected but missing examples: {ex}", enabled)
+        if len(actual_only):
+            ex = [f"({d.date()}, {t})" for d, t in list(actual_only)[:max_examples]]
+            _dbg(f"[trade alignment] unexpected actual examples: {ex}", enabled)
+
+    return {
+        "expected": int(n_expected),
+        "actual": int(n_actual),
+        "overlap": int(n_overlap),
+        "overlap_ratio_expected": float(overlap_ratio_expected) if pd.notna(overlap_ratio_expected) else np.nan,
+        "overlap_ratio_actual": float(overlap_ratio_actual) if pd.notna(overlap_ratio_actual) else np.nan,
+    }
+
+
 def simulate_earnings_bidir_vbt(
     proba_last_class: pd.Series,
     ohlcv: dict[str, pd.DataFrame],
@@ -255,6 +324,14 @@ def simulate_earnings_bidir_vbt(
         if n_trades and debug_show_examples:
             rec = pf.trades.records_readable
             _dbg(f"[trades sample]\n{rec.head(debug_show_examples).to_string(index=False)}", debug)
+
+        expected_keys = _expected_event_keys_from_signals(long_entries, short_entries)
+        _trade_alignment_report(
+            pf.trades.records_readable,
+            expected_keys=expected_keys,
+            enabled=debug,
+            max_examples=debug_show_examples,
+        )
 
     return pf
 
@@ -491,6 +568,9 @@ def make_event_signal_matrices(
     if debug:
         print("\n-- after reindex --")
         print("tmp.shape:", tmp.shape)
+        dedup_col = "event_day_use" if "event_day_use" in tmp.columns else ("event_day_norm" if "event_day_norm" in tmp.columns else "event_day")
+        dedup = tmp.reset_index().drop_duplicates(["ticker", dedup_col]).shape[0]
+        print(f"distinct (ticker, {dedup_col}):", dedup)
         print("tmp.event_day null count:", tmp['event_day'].isna().sum())
         print("tmp head:")
         print(tmp.head(3))
@@ -531,6 +611,9 @@ def make_event_signal_matrices(
     if debug:
         print("\n-- after dropping NaN event_day_norm --")
         print("tmp.shape:", tmp.shape)
+        dedup_col = "event_day_use" if "event_day_use" in tmp.columns else ("event_day_norm" if "event_day_norm" in tmp.columns else "event_day")
+        dedup = tmp.reset_index().drop_duplicates(["ticker", dedup_col]).shape[0]
+        print(f"distinct (ticker, {dedup_col}):", dedup)
 
     # Check overlap BEFORE filtering
     in_px = tmp['event_day_norm'].isin(px_close.index)
@@ -582,6 +665,9 @@ def make_event_signal_matrices(
     if debug:
         print("\n-- final kept events --")
         print("tmp.shape:", tmp.shape)
+        dedup_col = "event_day_use" if "event_day_use" in tmp.columns else ("event_day_norm" if "event_day_norm" in tmp.columns else "event_day")
+        dedup = tmp.reset_index().drop_duplicates(["ticker", dedup_col]).shape[0]
+        print(f"distinct (ticker, {dedup_col}):", dedup)
         if tmp.shape[0] == 0:
             # helpful diagnostics: range mismatch
             print("NO EVENTS KEPT.")
@@ -653,7 +739,9 @@ def attach_returns_to_events(tmp_events, trades, px_close):
 def vectorbt_trade_returns_gapaware(
     open_df, high_df, low_df, close_df,
     entries_long, exits_long, entries_short, exits_short,
-    tp=0.02, sl=0.01, init_cash=1.0
+    tp=0.02, sl=0.01, init_cash=1.0,
+    debug=False,
+    debug_show_examples=5,
 ):
     # Enums live in the docs under portfolio.enums (StopEntryPrice / StopExitPrice) :contentReference[oaicite:2]{index=2}
     StopEntryPrice = vbt.portfolio.enums.StopEntryPrice
@@ -688,6 +776,14 @@ def vectorbt_trade_returns_gapaware(
         direction="both"
     )
 
-    return pf.trades.records_readable.copy()
+    trades = pf.trades.records_readable.copy()
 
+    expected_keys = _expected_event_keys_from_signals(entries_long, entries_short)
+    _trade_alignment_report(
+        trades,
+        expected_keys=expected_keys,
+        enabled=debug,
+        max_examples=debug_show_examples,
+    )
 
+    return trades
