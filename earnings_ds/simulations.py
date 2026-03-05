@@ -55,6 +55,19 @@ def _expected_event_keys_from_signals(entries_long: pd.DataFrame, entries_short:
     return both.unique().set_names(["event_day", "ticker"])
 
 
+def _expected_event_keys_from_preds(proba_last_class: pd.Series, close: pd.DataFrame) -> pd.MultiIndex:
+    idx = proba_last_class.index
+    tick = idx.get_level_values(0).astype(str)
+    day = pd.to_datetime(idx.get_level_values(1)).normalize()
+
+    expected = pd.MultiIndex.from_arrays([day, tick], names=["event_day", "ticker"]).unique()
+    valid_days = pd.DatetimeIndex(close.index).normalize().unique()
+    valid_tickers = pd.Index(close.columns).astype(str).unique()
+
+    mask = expected.get_level_values("event_day").isin(valid_days) & expected.get_level_values("ticker").isin(valid_tickers)
+    return expected[mask]
+
+
 def _trade_alignment_report(
     trades: pd.DataFrame,
     expected_keys: pd.MultiIndex,
@@ -126,6 +139,7 @@ def simulate_earnings_bidir_vbt(
     fees: float = 0.0,
     slippage: float = 0.0,
     freq: str = "1D",
+    stop_exits_on_open_only: bool = True,
     # --- debug ---
     debug: bool = False,
     debug_show_examples: int = 5,
@@ -274,13 +288,18 @@ def simulate_earnings_bidir_vbt(
     _dbg("==== DEBUG: exits ====", debug)
     _bool_report(long_exits_time, "long_exits_time", debug)
     _bool_report(short_exits_time, "short_exits_time", debug)
+    _dbg(f"[stops] stop_exits_on_open_only={stop_exits_on_open_only}", debug)
 
     # --- simulate ---
+    # With daily bars, setting high/low to open enforces SL/TP checks at next-session open only.
+    stop_high = open_ if stop_exits_on_open_only else high
+    stop_low = open_ if stop_exits_on_open_only else low
+
     pf = vbt.Portfolio.from_signals(
         close=close,
         open=open_,
-        high=high,
-        low=low,
+        high=stop_high,
+        low=stop_low,
         entries=long_entries,
         exits=long_exits_time,
         short_entries=short_entries,
@@ -350,12 +369,17 @@ def simulate_earnings_long_vbt(
     fees: float = 0.0,
     slippage: float = 0.0,
     freq: str = "1D",
+    stop_exits_on_open_only: bool = True,
+    # --- debug ---
+    debug: bool = False,
+    debug_show_examples: int = 5,
 ) -> vbt.Portfolio:
     """Simulate long entries on earnings dates using daily OHLCV.
 
     Assumptions / mechanics:
     - Entry is executed at the CLOSE on the (aligned) earnings date.
-    - SL/TP are evaluated starting from the next bar (t+1) using OHLC.
+    - SL/TP are evaluated starting from the next bar (t+1). By default they are
+      evaluated using next-session OPEN only (`stop_exits_on_open_only=True`).
     - Time exit is executed at the CLOSE after `horizon` trading days.
     - Position sizing is computed daily across that day's entries using `size_type='percent'`
       and `cash_sharing=True`.
@@ -403,6 +427,24 @@ def simulate_earnings_long_vbt(
     # align to trading calendar/universe (exact match on dates and tickers)
     preds_df = preds_df.reindex(index=close.index, columns=close.columns)
 
+    _dbg("==== DEBUG: inputs ====", debug)
+    _dbg(f"[index] close.index: {close.index.min()} -> {close.index.max()}  n={len(close.index)}", debug)
+    _dbg(f"[cols ] close.columns n={len(close.columns)}", debug)
+    _df_nan_report(close, "close", debug)
+    _df_nan_report(open_, "open", debug)
+    _df_nan_report(high, "high", debug)
+    _df_nan_report(low, "low", debug)
+    _df_nan_report(preds_df, "preds_df(reindexed)", debug)
+
+    if debug:
+        expected_from_preds = _expected_event_keys_from_preds(proba_last_class, close)
+        _dbg(
+            "[preds index alignment] "
+            f"raw={len(proba_last_class.index)} unique_raw={len(proba_last_class.index.unique())} "
+            f"in_universe={len(expected_from_preds)}",
+            debug,
+        )
+
     # --- selection ---
     candidates = preds_df
     if min_proba is not None:
@@ -421,6 +463,19 @@ def simulate_earnings_long_vbt(
 
     entries = candidates.notna()
 
+    _dbg("==== DEBUG: selection ====", debug)
+    _bool_report(entries, "entries", debug)
+
+    if debug:
+        price_ok = close.notna()
+        bad_entries = entries & ~price_ok
+        n_bad = int(bad_entries.to_numpy().sum())
+        _dbg(f"[price check] entry signals on NaN close: {n_bad}", debug)
+        if n_bad and debug_show_examples:
+            ex = np.argwhere(bad_entries.to_numpy())[:debug_show_examples]
+            for r, c in ex:
+                _dbg(f"  example: {close.columns[c]} on {close.index[r]} close=NaN", debug)
+
     # --- sizing: per-day allocation fractions (0..1), only applied on entry bars ---
     if weighting not in ("equal", "proba"):
         raise ValueError("weighting must be 'equal' or 'proba'")
@@ -434,6 +489,12 @@ def simulate_earnings_long_vbt(
     size_frac = w_raw.div(w_sum, axis=0).fillna(0.0)
     size_frac = size_frac.where(entries, 0.0)
 
+    _dbg("==== DEBUG: sizing ====", debug)
+    _row_sum_report(size_frac, "size_frac", debug)
+    if debug:
+        n_nonzero = int((size_frac.to_numpy() != 0).sum())
+        _dbg(f"[size_frac] nonzero cells={n_nonzero}", debug)
+
     # --- time exits at CLOSE on bar + horizon ---
     if horizon < 1:
         raise ValueError("horizon must be >= 1")
@@ -446,12 +507,20 @@ def simulate_earnings_long_vbt(
         if exit_r < exits_time.shape[0]:
             exits_time.iat[exit_r, c] = True
 
+    _dbg("==== DEBUG: exits ====", debug)
+    _bool_report(exits_time, "exits_time", debug)
+    _dbg(f"[stops] stop_exits_on_open_only={stop_exits_on_open_only}", debug)
+
     # --- simulate ---
+    # With daily bars, setting high/low to open enforces SL/TP checks at next-session open only.
+    stop_high = open_ if stop_exits_on_open_only else high
+    stop_low = open_ if stop_exits_on_open_only else low
+
     pf = vbt.Portfolio.from_signals(
         close=close,
         open=open_,
-        high=high,
-        low=low,
+        high=stop_high,
+        low=stop_low,
         entries=entries,
         exits=exits_time,
         size=size_frac,
@@ -465,6 +534,36 @@ def simulate_earnings_long_vbt(
         tp_stop=take_profit,
         stop_entry_price="close",  # buy at close of earnings day
     )
+
+    _dbg("==== DEBUG: portfolio ====", debug)
+    if debug:
+        n_trades = int(pf.trades.count())
+        n_pos = int(pf.positions.count())
+        _dbg(f"[trades] count={n_trades}  [positions] count={n_pos}", debug)
+
+        value = pf.value()
+        ret = pf.returns()
+        _dbg(f"[value] nan={int(np.isnan(value.to_numpy()).sum())}/{value.size}", debug)
+        _dbg(f"[returns] nan={int(np.isnan(ret.to_numpy()).sum())}/{ret.size}", debug)
+        if value.size:
+            _dbg(f"[value] first/last: {float(value.iloc[0]):.2f} -> {float(value.iloc[-1]):.2f}", debug)
+
+        if n_trades == 0:
+            _dbg("NOTE: No trades executed -> many stats will be NaN.", debug)
+        elif np.all(np.isnan(ret.to_numpy())):
+            _dbg("NOTE: Returns are all-NaN -> stats will be NaN (check price NaNs around trade windows).", debug)
+
+        if n_trades and debug_show_examples:
+            rec = pf.trades.records_readable
+            _dbg(f"[trades sample]\n{rec.head(debug_show_examples).to_string(index=False)}", debug)
+
+        expected_keys = _expected_event_keys_from_preds(proba_last_class, close)
+        _trade_alignment_report(
+            pf.trades.records_readable,
+            expected_keys=expected_keys,
+            enabled=debug,
+            max_examples=debug_show_examples,
+        )
 
     return pf
 
@@ -740,6 +839,7 @@ def vectorbt_trade_returns_gapaware(
     open_df, high_df, low_df, close_df,
     entries_long, exits_long, entries_short, exits_short,
     tp=0.02, sl=0.01, init_cash=1.0,
+    stop_exits_on_open_only: bool = True,
     debug=False,
     debug_show_examples=5,
 ):
@@ -747,11 +847,15 @@ def vectorbt_trade_returns_gapaware(
     StopEntryPrice = vbt.portfolio.enums.StopEntryPrice
     StopExitPrice  = vbt.portfolio.enums.StopExitPrice
 
+    # With daily bars, setting high/low to open enforces SL/TP checks at next-session open only.
+    stop_high = open_df if stop_exits_on_open_only else high_df
+    stop_low = open_df if stop_exits_on_open_only else low_df
+
     pf = vbt.Portfolio.from_signals(
         close=close_df,
         open=open_df,
-        high=high_df,
-        low=low_df,
+        high=stop_high,
+        low=stop_low,
 
         entries=entries_long,
         exits=exits_long,
@@ -777,6 +881,8 @@ def vectorbt_trade_returns_gapaware(
     )
 
     trades = pf.trades.records_readable.copy()
+
+    _dbg(f"[stops] stop_exits_on_open_only={stop_exits_on_open_only}", debug)
 
     expected_keys = _expected_event_keys_from_signals(entries_long, entries_short)
     _trade_alignment_report(
