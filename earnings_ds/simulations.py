@@ -839,6 +839,7 @@ def vectorbt_trade_returns_gapaware(
     open_df, high_df, low_df, close_df,
     entries_long, exits_long, entries_short, exits_short,
     tp=0.02, sl=0.01, init_cash=1.0,
+    stop_exits_on_open_only: bool = True,
     debug=False,
     debug_show_examples=5,
 ):
@@ -846,11 +847,15 @@ def vectorbt_trade_returns_gapaware(
     StopEntryPrice = vbt.portfolio.enums.StopEntryPrice
     StopExitPrice  = vbt.portfolio.enums.StopExitPrice
 
+    # With daily bars, setting high/low to open enforces SL/TP checks at next-session open only.
+    stop_high = open_df if stop_exits_on_open_only else high_df
+    stop_low = open_df if stop_exits_on_open_only else low_df
+
     pf = vbt.Portfolio.from_signals(
         close=close_df,
         open=open_df,
-        high=high_df,
-        low=low_df,
+        high=stop_high,
+        low=stop_low,
 
         entries=entries_long,
         exits=exits_long,
@@ -876,6 +881,8 @@ def vectorbt_trade_returns_gapaware(
     )
 
     trades = pf.trades.records_readable.copy()
+
+    _dbg(f"[stops] stop_exits_on_open_only={stop_exits_on_open_only}", debug)
 
     expected_keys = _expected_event_keys_from_signals(entries_long, entries_short)
     _trade_alignment_report(
