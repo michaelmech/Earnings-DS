@@ -2,9 +2,12 @@ from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
+from lightgbm import LGBMClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+from sklearn.pipeline import make_pipeline
 from tqdm import tqdm
 from lightgbm import LGBMClassifier
 
@@ -191,7 +194,10 @@ def rolling_window_classifier_consistency_check(
     return pd.DataFrame(results)
 
 
-def cvs(X,y,model=LGBMClassifier(verbose=-1),std=False,return_scores=False):
+def cvs(X, y, model=None, std=False, return_scores=False):
+
+  if model is None:
+    model = LGBMClassifier(verbose=-1)
 
   X=X.replace({np.inf: np.nan,-np.inf: np.nan})
   cv=PurgedTimeSeriesSplit(dates=pd.Series(X.index.get_level_values('earnings_ts')),gap=121)
@@ -240,11 +246,33 @@ def chronological_split(df, y,val_ratio=0.2, date_level='earnings_ts'):
     return train_df, val_df,y_train,y_val
 
 
-def meta_cvs(X,y,primary_model=LGBMClassifier(verbose=-1),meta_model=make_pipeline(SimpleImputer(fill_value=-999),LogisticRegression()),ds=ds,close=close,
-             high=high,low=low,open=open_,tp=0.07,sl=0.03,primary_cvs=False,horizon=5):
+def meta_cvs(
+    X,
+    y,
+    ds,
+    close,
+    high,
+    low,
+    open_,
+    earnings_tickers,
+    primary_model=None,
+    meta_model=None,
+    tp=0.07,
+    sl=0.03,
+    primary_cvs=False,
+    horizon=5,
+):
+  from .meta_labeling import run_primary_plus_meta
+
+
+  if primary_model is None:
+    primary_model = LGBMClassifier(verbose=-1)
+
+  if meta_model is None:
+    meta_model = make_pipeline(SimpleImputer(fill_value=-999), LogisticRegression())
 
   if primary_cvs:
-    print(cvs(X.fillna(-999),y_new,primary_model))
+    print(cvs(X.fillna(-999), y, primary_model))
 
   X=X.replace({np.inf: np.nan,-np.inf: np.nan})
 
@@ -277,5 +305,3 @@ def cv_predict_proba_purged(model, X, y, cv):
         oof.iloc[te_idx] = model.predict_proba(X_te)[:, 1]
 
     return oof
-
-

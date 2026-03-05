@@ -1,6 +1,19 @@
 import numpy as np
 import pandas as pd
+from lightgbm import LGBMClassifier
 from scipy.stats import norm
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+
+from .cv import PurgedTimeSeriesSplit, cv_predict_proba_purged
+from .dataset_generation import build_synthetic_earnings_test_dataset
+from .helpers import save_model
+from .simulations import (
+    attach_returns_to_events,
+    make_event_signal_matrices,
+    vectorbt_trade_returns_gapaware,
+)
 
 def size_from_probs(
     close: pd.DataFrame,          # date x ticker
@@ -111,7 +124,7 @@ def run_primary_plus_meta(
     side_threshold=0.5,
     meta_min_abs_ret=0.0,
     gap=121,
-    anchors=ANCHORS,
+    anchors=None,
     score_mode=False,
     sl=0.032,
     tp=0.032,
@@ -356,5 +369,4 @@ def run_primary_plus_meta(
         'X_meta': X_meta,
         'y_meta': y_meta
     }
-
 
