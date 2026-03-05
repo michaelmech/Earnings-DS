@@ -6,6 +6,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
 from tqdm import tqdm
+from lightgbm import LGBMClassifier
 
 class PurgedTimeSeriesSplit:
     def __init__(self, dates, n_splits=5, gap=0, window_size=None):
