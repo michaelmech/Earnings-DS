@@ -3,6 +3,7 @@ import pandas as pd
 
 from earnings_ds.simulations import (
     simulate_earnings_bidir_vbt,
+    simulate_earnings_long_vbt,
     make_event_signal_matrices,
     vectorbt_trade_returns_gapaware,
     attach_returns_to_events,
@@ -124,3 +125,54 @@ def test_event_join_and_trade_attachment_alignment():
     assert len(out) == len(tmp_events)
     matched = out["trade_ret"].notna().sum()
     assert matched / len(out) >= 0.80
+
+
+def test_simulate_earnings_long_trade_alignment_with_preds_index():
+    dates = pd.bdate_range("2024-03-01", periods=20)
+    tickers = ["AAA", "BBB", "CCC"]
+    open_, high, low, close = _sample_ohlc(dates, tickers)
+
+    events = [
+        ("AAA", pd.Timestamp("2024-03-04 16:00"), 0.80),
+        ("BBB", pd.Timestamp("2024-03-05 16:00"), 0.65),
+        ("CCC", pd.Timestamp("2024-03-06 16:00"), 0.20),
+        ("AAA", pd.Timestamp("2024-03-07 16:00"), 0.30),
+        ("BBB", pd.Timestamp("2024-03-08 16:00"), 0.85),
+        ("CCC", pd.Timestamp("2024-03-11 16:00"), 0.55),
+    ]
+
+    idx = pd.MultiIndex.from_tuples([(t, ts) for t, ts, _ in events], names=["ticker", "earnings_ts"])
+    proba = pd.Series([p for _, _, p in events], index=idx)
+
+    pf = simulate_earnings_long_vbt(
+        proba_last_class=proba,
+        ohlcv={"open": open_, "high": high, "low": low, "close": close},
+        horizon=2,
+        min_proba=0.5,
+        weighting="equal",
+        debug=True,
+    )
+
+    trades = pf.trades.records_readable.copy()
+    assert not trades.empty
+
+    expected = []
+    for t, ts, p in events:
+        d = ts.normalize()
+        if d in dates and p >= 0.5:
+            expected.append((d, t))
+
+    expected_idx = pd.MultiIndex.from_tuples(expected, names=["event_day", "ticker"]).unique()
+    trades_idx = pd.MultiIndex.from_frame(
+        pd.DataFrame(
+            {
+                "event_day": pd.to_datetime(trades["Entry Timestamp"]).dt.normalize(),
+                "ticker": trades["Column"].astype(str),
+            }
+        )
+    ).unique()
+
+    overlap = expected_idx.intersection(trades_idx)
+    overlap_ratio = len(overlap) / len(expected_idx)
+
+    assert overlap_ratio >= 0.80
