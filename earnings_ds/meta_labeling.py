@@ -10,9 +10,7 @@ from .cv import PurgedTimeSeriesSplit, cv_predict_proba_purged
 from .dataset_generation import build_synthetic_earnings_test_dataset
 from .helpers import save_model
 from .simulations import (
-    attach_returns_to_events,
-    make_event_signal_matrices,
-    vectorbt_trade_returns_gapaware,
+    simulate_event_returns_from_proba,
 )
 
 def size_from_probs(
@@ -188,33 +186,30 @@ def run_primary_plus_meta(
     idx_df = d[['event_day']].copy()
     print("PASSING idx_df.index.names:", idx_df.index.names)  # should be ['ticker','earnings_ts']
 
-    tmp_events, el, xl, es, xs = make_event_signal_matrices(
+    (
+        events_with_ret,
+        tmp_events,
+        trades,
+        el,
+        xl,
+        es,
+        xs,
+    ) = simulate_event_returns_from_proba(
         index_df=idx_df,
-        px_close=px_close,
         p_primary=p_oof,
+        px_open=px_open,
+        px_high=px_high,
+        px_low=px_low,
+        px_close=px_close,
         horizon=horizon,
         side_threshold=side_threshold,
-        debug=False,
+        tp=tp,
+        sl=sl,
+        long_only=long_only,
     )
 
-    if long_only:
-      es[:] = False
-      xs[:] = False
-
-    trades = vectorbt_trade_returns_gapaware(
-              open_df=px_open,
-              high_df=px_high,
-              low_df=px_low,
-              close_df=px_close,
-              entries_long=el, exits_long=xl,
-              entries_short=es, exits_short=xs,
-              tp=tp, sl=sl
-          )
-
-    print(trades.shape,'trades shape')
-    print(len(tmp_events),'events lengths')
-
-    events_with_ret = attach_returns_to_events(tmp_events, trades, px_close)
+    print(trades.shape, 'trades shape')
+    print(len(tmp_events), 'events lengths')
 
     print(events_with_ret.dropna(subset=['trade_ret']).shape,'shape after dropping nans')
 
@@ -369,4 +364,3 @@ def run_primary_plus_meta(
         'X_meta': X_meta,
         'y_meta': y_meta
     }
-
