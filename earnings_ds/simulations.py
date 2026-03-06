@@ -846,6 +846,68 @@ def attach_returns_to_events(tmp_events, trades, px_close):
     return out
 
 
+def simulate_event_returns_from_proba(
+    *,
+    index_df: pd.DataFrame,
+    p_primary: pd.Series,
+    px_open: pd.DataFrame,
+    px_high: pd.DataFrame,
+    px_low: pd.DataFrame,
+    px_close: pd.DataFrame,
+    horizon: int = 5,
+    side_threshold: float = 0.5,
+    tp: float = 0.032,
+    sl: float = 0.032,
+    long_only: bool = True,
+    debug: bool = False,
+):
+    """Run the canonical event->signals->vectorbt->event returns pipeline.
+
+    This helper exists to keep simulation methodology identical across workflows
+    (e.g., purged-CV OOF probabilities and chronological holdout probabilities).
+
+    Returns
+    -------
+    events_with_ret : pd.DataFrame
+        Event table indexed by (ticker, earnings_ts) with `trade_ret` attached.
+    tmp_events : pd.DataFrame
+        Event table used to create signal matrices.
+    trades : pd.DataFrame
+        `vectorbt` trade records in readable format.
+    el, xl, es, xs : pd.DataFrame
+        Long/short entry/exit signal matrices used in simulation.
+    """
+    tmp_events, el, xl, es, xs = make_event_signal_matrices(
+        index_df=index_df,
+        px_close=px_close,
+        p_primary=p_primary,
+        horizon=horizon,
+        side_threshold=side_threshold,
+        debug=debug,
+    )
+
+    if long_only:
+        es[:] = False
+        xs[:] = False
+
+    trades = vectorbt_trade_returns_gapaware(
+        open_df=px_open,
+        high_df=px_high,
+        low_df=px_low,
+        close_df=px_close,
+        entries_long=el,
+        exits_long=xl,
+        entries_short=es,
+        exits_short=xs,
+        tp=tp,
+        sl=sl,
+        debug=debug,
+    )
+
+    events_with_ret = attach_returns_to_events(tmp_events, trades, px_close)
+    return events_with_ret, tmp_events, trades, el, xl, es, xs
+
+
 def vectorbt_trade_returns_gapaware(
     open_df, high_df, low_df, close_df,
     entries_long, exits_long, entries_short, exits_short,
