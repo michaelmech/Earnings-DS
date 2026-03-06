@@ -557,10 +557,21 @@ def simulate_earnings_long_vbt(
             rec = pf.trades.records_readable
             _dbg(f"[trades sample]\n{rec.head(debug_show_examples).to_string(index=False)}", debug)
 
-        expected_keys = _expected_event_keys_from_preds(proba_last_class, close)
+        _dbg("[trade alignment] baseline=preds_in_universe", debug)
+        expected_from_preds = _expected_event_keys_from_preds(proba_last_class, close)
         _trade_alignment_report(
             pf.trades.records_readable,
-            expected_keys=expected_keys,
+            expected_keys=expected_from_preds,
+            enabled=debug,
+            max_examples=debug_show_examples,
+        )
+
+        _dbg("[trade alignment] baseline=selected_entries", debug)
+        empty_short = pd.DataFrame(False, index=entries.index, columns=entries.columns)
+        expected_from_entries = _expected_event_keys_from_signals(entries, empty_short)
+        _trade_alignment_report(
+            pf.trades.records_readable,
+            expected_keys=expected_from_entries,
             enabled=debug,
             max_examples=debug_show_examples,
         )
