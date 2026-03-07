@@ -924,6 +924,17 @@ def vectorbt_trade_returns_gapaware(
     stop_high = open_df if stop_exits_on_open_only else high_df
     stop_low = open_df if stop_exits_on_open_only else low_df
 
+    # Match sizing semantics used in other simulation functions:
+    # - normalize same-day candidate weights to sum to 1.0
+    # - pass percent sizes with shared cash pool across columns
+    w_raw = (entries_long.astype(float) + entries_short.astype(float)).where(
+        (entries_long | entries_short),
+        0.0,
+    )
+    w_sum = w_raw.sum(axis=1).replace(0.0, np.nan)
+    size_frac = w_raw.div(w_sum, axis=0).fillna(0.0)
+    size_frac = size_frac.where((entries_long | entries_short), 0.0)
+
     pf = vbt.Portfolio.from_signals(
         close=close_df,
         open=open_df,
@@ -934,6 +945,9 @@ def vectorbt_trade_returns_gapaware(
         exits=exits_long,
         short_entries=entries_short,
         short_exits=exits_short,
+
+        size=size_frac,
+        size_type="percent",
 
         # Percent stops relative to entry
         sl_stop=sl,
@@ -947,6 +961,7 @@ def vectorbt_trade_returns_gapaware(
         stop_exit_price=StopExitPrice.StopMarket,
 
         init_cash=init_cash,
+        cash_sharing=True,
         fees=0.0,
         slippage=0.0,
         freq="1D",
