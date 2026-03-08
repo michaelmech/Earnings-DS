@@ -5,7 +5,8 @@ import pandas as pd
 from lightgbm import LGBMClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score
+from sklearn.base import clone
+from sklearn.metrics import average_precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 from sklearn.pipeline import make_pipeline
 from tqdm import tqdm
@@ -289,6 +290,165 @@ def meta_cvs(
   score = cvs(X_meta.fillna(-999), y_meta, meta_model,return_scores=True)
 
   return score
+
+
+def _fold_imbalance_penalty(y_true, min_fold_pos_rate):
+  """Penalize folds where class balance is too extreme."""
+  fold_pos_rate = float(np.mean(y_true == 1))
+  min_rate = float(min_fold_pos_rate)
+
+  if min_rate <= 0:
+    return 1.0
+
+  left = fold_pos_rate / min_rate
+  right = (1.0 - fold_pos_rate) / min_rate
+  return float(max(0.0, min(1.0, left, right)))
+
+
+def _cv_recall_skill(model, X, y, cv, min_fold_pos_rate=0.05):
+  """Chance-corrected recall using predicted-positive rate as baseline."""
+  scores = []
+
+  for tr_idx, te_idx in cv.split(X, y):
+    m = clone(model)
+    X_tr, y_tr = X.iloc[tr_idx], y.iloc[tr_idx]
+    X_te, y_te = X.iloc[te_idx], y.iloc[te_idx]
+
+    m.fit(X_tr, y_tr)
+    y_pred = m.predict(X_te)
+
+    recall = recall_score(y_te, y_pred, zero_division=0)
+    pred_pos_rate = float(np.mean(y_pred == 1))
+
+    if pred_pos_rate >= 1.0:
+      recall_skill = 0.0
+    else:
+      recall_skill = (recall - pred_pos_rate) / (1.0 - pred_pos_rate)
+
+    imbalance_penalty = _fold_imbalance_penalty(y_te, min_fold_pos_rate)
+    scores.append(np.clip(recall_skill, 0.0, 1.0) * imbalance_penalty)
+
+  return float(np.mean(scores))
+
+
+def _cv_average_precision_skill(model, X, y, cv, min_fold_pos_rate=0.05):
+  """Chance-corrected average precision using prevalence as baseline."""
+  scores = []
+
+  for tr_idx, te_idx in cv.split(X, y):
+    m = clone(model)
+    X_tr, y_tr = X.iloc[tr_idx], y.iloc[tr_idx]
+    X_te, y_te = X.iloc[te_idx], y.iloc[te_idx]
+
+    m.fit(X_tr, y_tr)
+    y_prob = m.predict_proba(X_te)[:, 1]
+
+    pos_rate = float(np.mean(y_te == 1))
+    if pos_rate >= 1.0:
+      ap_skill = 0.0
+    else:
+      ap = average_precision_score(y_te, y_prob)
+      ap_skill = (ap - pos_rate) / (1.0 - pos_rate)
+
+    imbalance_penalty = _fold_imbalance_penalty(y_te, min_fold_pos_rate)
+    scores.append(np.clip(ap_skill, 0.0, 1.0) * imbalance_penalty)
+
+  return float(np.mean(scores))
+
+
+def meta_cvs_composite(
+    X,
+    y,
+    ds,
+    close,
+    high,
+    low,
+    open_,
+    earnings_tickers,
+    primary_model=None,
+    meta_model=None,
+    tp=0.07,
+    sl=0.03,
+    horizon=5,
+    adjust_for_imbalance=True,
+    min_fold_pos_rate=0.05,
+):
+  from .meta_labeling import run_primary_plus_meta
+
+  if primary_model is None:
+    primary_model = LGBMClassifier(verbose=-1)
+
+  if meta_model is None:
+    meta_model = make_pipeline(SimpleImputer(fill_value=-999), LogisticRegression())
+
+  X = X.replace({np.inf: np.nan, -np.inf: np.nan})
+
+  primary_cv = PurgedTimeSeriesSplit(
+      dates=pd.Series(X.index.get_level_values('earnings_ts')),
+      gap=121,
+  )
+  X_primary = X.sort_index(level='earnings_ts')
+  y_primary = y.loc[X_primary.index]
+
+  if adjust_for_imbalance:
+    primary_score = _cv_recall_skill(
+        primary_model,
+        X_primary.fillna(-999),
+        y_primary,
+        primary_cv,
+        min_fold_pos_rate=min_fold_pos_rate,
+    )
+  else:
+    primary_score = cross_val_score(
+        primary_model,
+        X_primary.fillna(-999),
+        y_primary,
+        scoring='recall',
+        error_score='raise',
+        cv=primary_cv,
+    ).mean()
+
+  X_meta, y_meta = run_primary_plus_meta(
+      X.fillna(-999),
+      y,
+      ds,
+      close,
+      open_,
+      high,
+      low,
+      earnings_tickers,
+      primary_model=primary_model,
+      tp=tp,
+      sl=sl,
+      score_mode=True,
+      horizon=horizon,
+  )
+
+  X_meta = X_meta.replace({np.inf: np.nan, -np.inf: np.nan})
+  X_meta = X_meta.sort_index(level='earnings_ts')
+  y_meta = y_meta.loc[X_meta.index]
+
+  meta_cv = PurgedTimeSeriesSplit(
+      dates=pd.Series(X_meta.index.get_level_values('earnings_ts')),
+      gap=121,
+  )
+
+  if adjust_for_imbalance:
+    meta_score = _cv_average_precision_skill(
+        meta_model,
+        X_meta.fillna(-999),
+        y_meta,
+        meta_cv,
+        min_fold_pos_rate=min_fold_pos_rate,
+    )
+  else:
+    meta_score = cvs(
+        X_meta.fillna(-999),
+        y_meta,
+        meta_model,
+    )
+
+  return (primary_score + meta_score) / 2
 
 
 def cv_predict_proba_purged(model, X, y, cv):
