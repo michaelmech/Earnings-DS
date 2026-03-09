@@ -304,7 +304,6 @@ def meta_cvs(
       return_scores=True,
       label='Meta CV',
   )
-  print('Meta CV scores distribution:', score)
 
   return score
 
