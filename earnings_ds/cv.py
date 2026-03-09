@@ -256,6 +256,7 @@ def meta_cvs(
     low,
     open_,
     earnings_tickers,
+    volume=None,
     primary_model=None,
     meta_model=None,
     tp=0.07,
@@ -279,6 +280,7 @@ def meta_cvs(
 
   X_meta,y_meta=run_primary_plus_meta(
           X.fillna(-999), y, ds, close,open_,high,low,earnings_tickers,
+          px_volume=volume,
           primary_model=primary_model,tp=tp,sl=sl,
           score_mode=True,horizon=horizon
       )
@@ -365,6 +367,7 @@ def meta_cvs_composite(
     low,
     open_,
     earnings_tickers,
+    volume=None,
     primary_model=None,
     meta_model=None,
     tp=0.07,
@@ -417,6 +420,7 @@ def meta_cvs_composite(
       high,
       low,
       earnings_tickers,
+      px_volume=volume,
       primary_model=primary_model,
       tp=tp,
       sl=sl,

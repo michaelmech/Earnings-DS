@@ -116,6 +116,7 @@ def build_meta_dataset(X, p_primary, trade_ret, min_abs_ret=0.0):
 
 def run_primary_plus_meta(
     X, y, data_with_event_day, px_close,px_open,px_high,px_low, tickers,
+    px_volume=None,
     horizon=5,
     primary_model=None,
     meta_model=None,
@@ -128,6 +129,8 @@ def run_primary_plus_meta(
     tp=0.032,
     save_meta_model_path=None,
     long_only=True,
+    use_smart_slippage=True,
+    smart_slippage_kwargs=None,
 ):
     if primary_model is None:
         primary_model = LGBMClassifier(verbose=-1)
@@ -201,11 +204,14 @@ def run_primary_plus_meta(
         px_high=px_high,
         px_low=px_low,
         px_close=px_close,
+        px_volume=px_volume,
         horizon=horizon,
         side_threshold=side_threshold,
         tp=tp,
         sl=sl,
         long_only=long_only,
+        use_smart_slippage=use_smart_slippage,
+        smart_slippage_kwargs=smart_slippage_kwargs,
     )
 
     print(trades.shape, 'trades shape')
