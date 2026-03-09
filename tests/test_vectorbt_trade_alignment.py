@@ -7,6 +7,7 @@ from earnings_ds.simulations import (
     make_event_signal_matrices,
     vectorbt_trade_returns_gapaware,
     attach_returns_to_events,
+    simulate_event_returns_from_proba,
 )
 
 
@@ -176,3 +177,47 @@ def test_simulate_earnings_long_trade_alignment_with_preds_index():
     overlap_ratio = len(overlap) / len(expected_idx)
 
     assert overlap_ratio >= 0.80
+
+
+def test_illiquidity_gate_blocks_events_above_tp_price_cap():
+    dates = pd.bdate_range("2024-04-01", periods=8)
+    tickers = ["AAA", "BBB"]
+    open_, high, low, close = _sample_ohlc(dates, tickers)
+
+    idx = pd.MultiIndex.from_tuples(
+        [
+            ("AAA", pd.Timestamp("2024-04-02 16:00")),
+            ("BBB", pd.Timestamp("2024-04-03 16:00")),
+        ],
+        names=["ticker", "earnings_ts"],
+    )
+    p_primary = pd.Series([0.8, 0.8], index=idx)
+    index_df = pd.DataFrame(
+        {"event_day": [pd.Timestamp("2024-04-02"), pd.Timestamp("2024-04-03")]},
+        index=idx,
+    )
+
+    spread_df = pd.DataFrame(0.5, index=dates, columns=tickers)
+    spread_df.loc[pd.Timestamp("2024-04-02"), "AAA"] = 10.0  # should be blocked for tp=3%
+
+    events_with_ret, *_ = simulate_event_returns_from_proba(
+        index_df=index_df,
+        p_primary=p_primary,
+        px_open=open_,
+        px_high=high,
+        px_low=low,
+        px_close=close,
+        px_volume=None,
+        horizon=2,
+        side_threshold=0.5,
+        tp=0.03,
+        sl=0.03,
+        long_only=True,
+        use_smart_slippage=False,
+        use_illiquidity_gate=True,
+        illiquidity_spread_df=spread_df,
+    )
+
+    # AAA is blocked by illiquidity gate; BBB remains tradable.
+    assert pd.isna(events_with_ret.loc[("AAA", pd.Timestamp("2024-04-02 16:00")), "trade_ret"])
+    assert pd.notna(events_with_ret.loc[("BBB", pd.Timestamp("2024-04-03 16:00")), "trade_ret"])
