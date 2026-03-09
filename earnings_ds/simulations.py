@@ -894,6 +894,7 @@ def simulate_event_returns_from_proba(
     use_smart_slippage: bool = True,
     smart_slippage_kwargs: dict | None = None,
     debug: bool = False,
+    return_pf: bool = False,
 ):
     """Run the canonical event->signals->vectorbt->event returns pipeline.
 
@@ -910,6 +911,8 @@ def simulate_event_returns_from_proba(
         `vectorbt` trade records in readable format.
     el, xl, es, xs : pd.DataFrame
         Long/short entry/exit signal matrices used in simulation.
+    pf : vbt.Portfolio, optional
+        Returned when ``return_pf=True`` for direct portfolio-level analysis.
     """
     tmp_events, el, xl, es, xs = make_event_signal_matrices(
         index_df=index_df,
@@ -924,7 +927,7 @@ def simulate_event_returns_from_proba(
         es[:] = False
         xs[:] = False
 
-    trades = vectorbt_trade_returns_gapaware(
+    trades_out = vectorbt_trade_returns_gapaware(
         open_df=px_open,
         high_df=px_high,
         low_df=px_low,
@@ -939,10 +942,47 @@ def simulate_event_returns_from_proba(
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
         debug=debug,
+        return_pf=return_pf,
     )
 
+    if return_pf:
+        trades, pf = trades_out
+        _print_pf_key_stats(pf, prefix='[simulate_event_returns_from_proba] ')
+    else:
+        trades = trades_out
+
     events_with_ret = attach_returns_to_events(tmp_events, trades, px_close)
+    if return_pf:
+        return events_with_ret, tmp_events, trades, el, xl, es, xs, pf
+
     return events_with_ret, tmp_events, trades, el, xl, es, xs
+
+
+def _print_pf_key_stats(pf, prefix: str = ""):
+    stats = pf.stats()
+    key_candidates = {
+        'sharpe_ratio': ['Sharpe Ratio'],
+        'max_drawdown': ['Max Drawdown [%]', 'Max Drawdown'],
+        'total_return': ['Total Return [%]', 'Total Return'],
+        'win_rate': ['Win Rate [%]', 'Win Rate'],
+        'trades': ['Total Trades', 'Total Closed Trades'],
+    }
+
+    def _pick(candidates):
+        for c in candidates:
+            if c in stats.index:
+                return stats[c]
+        return np.nan
+
+    selected = {k: _pick(v) for k, v in key_candidates.items()}
+    print(
+        f"{prefix}pf.stats selected -> "
+        f"Sharpe Ratio: {selected['sharpe_ratio']}, "
+        f"Max Drawdown: {selected['max_drawdown']}, "
+        f"Total Return: {selected['total_return']}, "
+        f"Win Rate: {selected['win_rate']}, "
+        f"# Trades: {selected['trades']}"
+    )
 
 
 def vectorbt_trade_returns_gapaware(
@@ -955,6 +995,7 @@ def vectorbt_trade_returns_gapaware(
     smart_slippage_kwargs: dict | None = None,
     debug=False,
     debug_show_examples=5,
+    return_pf: bool = False,
 ):
     # Enums live in the docs under portfolio.enums (StopEntryPrice / StopExitPrice) :contentReference[oaicite:2]{index=2}
     StopEntryPrice = vbt.portfolio.enums.StopEntryPrice
@@ -1034,5 +1075,8 @@ def vectorbt_trade_returns_gapaware(
         enabled=debug,
         max_examples=debug_show_examples,
     )
+
+    if return_pf:
+        return trades, pf
 
     return trades

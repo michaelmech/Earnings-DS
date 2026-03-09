@@ -197,6 +197,7 @@ def run_primary_plus_meta(
         xl,
         es,
         xs,
+        pf,
     ) = simulate_event_returns_from_proba(
         index_df=idx_df,
         p_primary=p_oof,
@@ -212,9 +213,11 @@ def run_primary_plus_meta(
         long_only=long_only,
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
+        return_pf=True,
     )
 
     print(trades.shape, 'trades shape')
+    print(pf, 'portfolio object')
     print(len(tmp_events), 'events lengths')
 
     print(events_with_ret.dropna(subset=['trade_ret']).shape,'shape after dropping nans')
@@ -461,7 +464,7 @@ def derive_meta_test_predictions(
     d_train = d_train.set_index(['ticker', 'earnings_ts']).sort_index().reindex(X_train.index)
     idx_train = d_train[['event_day']].copy()
 
-    events_train, tmp_events_train, trades_train, el_train, xl_train, es_train, xs_train = simulate_event_returns_from_proba(
+    events_train, tmp_events_train, trades_train, el_train, xl_train, es_train, xs_train, pf_train = simulate_event_returns_from_proba(
         index_df=idx_train,
         p_primary=p_oof_train,
         px_open=px_open_train,
@@ -476,6 +479,7 @@ def derive_meta_test_predictions(
         long_only=long_only,
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
+        return_pf=True,
     )
 
     trade_ret_train = events_train['trade_ret'].dropna()
@@ -518,7 +522,7 @@ def derive_meta_test_predictions(
     d_test = d_test.set_index(['ticker', 'earnings_ts']).sort_index().reindex(X_test.index)
     idx_test = d_test[['event_day']].copy()
 
-    events_test, tmp_events_test, trades_test, el_test, xl_test, es_test, xs_test = simulate_event_returns_from_proba(
+    events_test, tmp_events_test, trades_test, el_test, xl_test, es_test, xs_test, pf_test = simulate_event_returns_from_proba(
         index_df=idx_test,
         p_primary=p_primary_test,
         px_open=px_open_test,
@@ -533,6 +537,7 @@ def derive_meta_test_predictions(
         long_only=long_only,
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
+        return_pf=True,
     )
 
     events_test = events_test.copy()
@@ -547,7 +552,7 @@ def derive_meta_test_predictions(
     gated_idx = idx_test.loc[take_mask.reindex(idx_test.index).fillna(False)]
     gated_p_primary = p_primary_test.loc[gated_idx.index]
 
-    events_test_meta_gated, tmp_events_gated, trades_gated, el_gated, xl_gated, es_gated, xs_gated = simulate_event_returns_from_proba(
+    events_test_meta_gated, tmp_events_gated, trades_gated, el_gated, xl_gated, es_gated, xs_gated, pf_gated = simulate_event_returns_from_proba(
         index_df=gated_idx,
         p_primary=gated_p_primary,
         px_open=px_open_test,
@@ -562,6 +567,7 @@ def derive_meta_test_predictions(
         long_only=long_only,
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
+        return_pf=True,
     )
     events_test_meta_gated = events_test_meta_gated.copy()
     events_test_meta_gated['p_meta'] = p_meta_test.reindex(events_test_meta_gated.index)
@@ -601,11 +607,14 @@ def derive_meta_test_predictions(
         'meta_model': meta_fit,
         'tmp_events_train': tmp_events_train,
         'trades_train': trades_train,
+        'pf_train': pf_train,
         'signals_train': {'el': el_train, 'xl': xl_train, 'es': es_train, 'xs': xs_train},
         'tmp_events_test': tmp_events_test,
         'trades_test': trades_test,
+        'pf_test': pf_test,
         'signals_test': {'el': el_test, 'xl': xl_test, 'es': es_test, 'xs': xs_test},
         'tmp_events_gated': tmp_events_gated,
         'trades_gated': trades_gated,
+        'pf_gated': pf_gated,
         'signals_gated': {'el': el_gated, 'xl': xl_gated, 'es': es_gated, 'xs': xs_gated},
     }
