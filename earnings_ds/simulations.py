@@ -50,7 +50,7 @@ def calculate_agk_spread_proxy(
     This is an AGK-inspired proxy derived only from OHLC inputs and returned as
     a spread matrix in price units (same units as `close_df`).
     """
-    del open_df, close_df  # kept for interface symmetry/future estimator swaps
+    del open_df  # kept for interface symmetry/future estimator swaps
 
     hl_rel = 2.0 * (high_df - low_df) / (high_df + low_df).replace(0.0, np.nan)
     spread_dollars = (hl_rel * close_df).abs()
