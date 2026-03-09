@@ -131,6 +131,9 @@ def run_primary_plus_meta(
     long_only=True,
     use_smart_slippage=True,
     smart_slippage_kwargs=None,
+    use_illiquidity_gate=False,
+    illiquidity_spread_df=None,
+    illiquidity_spread_kwargs=None,
 ):
     if primary_model is None:
         primary_model = LGBMClassifier(verbose=-1)
@@ -213,6 +216,9 @@ def run_primary_plus_meta(
         long_only=long_only,
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
+        use_illiquidity_gate=use_illiquidity_gate,
+        illiquidity_spread_df=illiquidity_spread_df,
+        illiquidity_spread_kwargs=illiquidity_spread_kwargs,
         return_pf=True,
     )
 
@@ -400,6 +406,9 @@ def derive_meta_test_predictions(
     drop_feats=('UBX', 'BTCUSD'),
     use_smart_slippage=True,
     smart_slippage_kwargs=None,
+    use_illiquidity_gate=False,
+    illiquidity_spread_df=None,
+    illiquidity_spread_kwargs=None,
 ):
     """Train primary+meta on train split and score a fixed test split.
 
@@ -479,6 +488,9 @@ def derive_meta_test_predictions(
         long_only=long_only,
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
+        use_illiquidity_gate=use_illiquidity_gate,
+        illiquidity_spread_df=illiquidity_spread_df,
+        illiquidity_spread_kwargs=illiquidity_spread_kwargs,
         return_pf=True,
     )
 
@@ -537,6 +549,9 @@ def derive_meta_test_predictions(
         long_only=long_only,
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
+        use_illiquidity_gate=use_illiquidity_gate,
+        illiquidity_spread_df=illiquidity_spread_df,
+        illiquidity_spread_kwargs=illiquidity_spread_kwargs,
         return_pf=True,
     )
 
@@ -567,6 +582,9 @@ def derive_meta_test_predictions(
         long_only=long_only,
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
+        use_illiquidity_gate=use_illiquidity_gate,
+        illiquidity_spread_df=illiquidity_spread_df,
+        illiquidity_spread_kwargs=illiquidity_spread_kwargs,
         return_pf=True,
     )
     events_test_meta_gated = events_test_meta_gated.copy()

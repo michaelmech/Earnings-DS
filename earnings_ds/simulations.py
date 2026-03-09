@@ -33,6 +33,29 @@ def calculate_smart_slippage(
     total_slippage = float(base_spread) + vol_comp + impact_comp
     return total_slippage.clip(lower=float(min_slippage), upper=float(max_slippage)).fillna(0.0)
 
+
+def calculate_agk_spread_proxy(
+    open_df: pd.DataFrame,
+    high_df: pd.DataFrame,
+    low_df: pd.DataFrame,
+    close_df: pd.DataFrame,
+    *,
+    min_spread: float = 0.0,
+    max_spread: float = 100.0,
+) -> pd.DataFrame:
+    """Estimate per-bar spread in price units from OHLC for illiquidity gating.
+
+    Notes
+    -----
+    This is an AGK-inspired proxy derived only from OHLC inputs and returned as
+    a spread matrix in price units (same units as `close_df`).
+    """
+    del open_df, close_df  # kept for interface symmetry/future estimator swaps
+
+    hl_rel = 2.0 * (high_df - low_df) / (high_df + low_df).replace(0.0, np.nan)
+    spread_dollars = (hl_rel * close_df).abs()
+    return spread_dollars.clip(lower=float(min_spread), upper=float(max_spread)).fillna(0.0)
+
 def _dbg(msg: str, enabled: bool) -> None:
     if enabled:
         print(msg)
@@ -673,6 +696,8 @@ def make_event_signal_matrices(
     side_threshold=0.5,
     debug=False,
     map_to_next_trading_day=False,
+    illiquidity_spread_df: pd.DataFrame | None = None,
+    illiquidity_threshold_by_event: pd.Series | None = None,
     sample_n=10,
 ):
     """
@@ -830,14 +855,27 @@ def make_event_signal_matrices(
 
     long_mask = tmp['p_primary'] >= side_threshold
 
+    blocked_by_illiquidity = 0
+
     for (tkr, ets), row in tmp.iterrows():
         d = row['event_day_use']
         if tkr not in tickers:
             continue
+
+        if illiquidity_spread_df is not None and illiquidity_threshold_by_event is not None:
+            est_spread = illiquidity_spread_df.at[d, tkr] if (d in illiquidity_spread_df.index and tkr in illiquidity_spread_df.columns) else np.nan
+            spread_cap = illiquidity_threshold_by_event.loc[(tkr, ets)] if (tkr, ets) in illiquidity_threshold_by_event.index else np.nan
+            if pd.notna(est_spread) and pd.notna(spread_cap) and float(est_spread) > float(spread_cap):
+                blocked_by_illiquidity += 1
+                continue
+
         if long_mask.loc[(tkr, ets)]:
             entries_long.loc[d, tkr] = True
         else:
             entries_short.loc[d, tkr] = True
+
+    if debug and illiquidity_spread_df is not None and illiquidity_threshold_by_event is not None:
+        print(f"[illiquidity gate] blocked events: {blocked_by_illiquidity}")
 
     exits_long  = entries_long.vbt.signals.fshift(horizon, fill_value=False)
     exits_short = entries_short.vbt.signals.fshift(horizon, fill_value=False)
@@ -893,6 +931,10 @@ def simulate_event_returns_from_proba(
     long_only: bool = True,
     use_smart_slippage: bool = True,
     smart_slippage_kwargs: dict | None = None,
+    use_illiquidity_gate: bool = False,
+    illiquidity_spread_df: pd.DataFrame | None = None,
+    illiquidity_spread_fn=calculate_agk_spread_proxy,
+    illiquidity_spread_kwargs: dict | None = None,
     debug: bool = False,
     return_pf: bool = False,
 ):
@@ -914,12 +956,36 @@ def simulate_event_returns_from_proba(
     pf : vbt.Portfolio, optional
         Returned when ``return_pf=True`` for direct portfolio-level analysis.
     """
+    if use_illiquidity_gate:
+        spread_df = illiquidity_spread_df
+        if spread_df is None:
+            spread_df = illiquidity_spread_fn(
+                open_df=px_open,
+                high_df=px_high,
+                low_df=px_low,
+                close_df=px_close,
+                **(illiquidity_spread_kwargs or {}),
+            )
+        spread_df = spread_df.reindex_like(px_close)
+        tp_threshold_df = (float(tp) * px_close).abs()
+        illiquidity_threshold_by_event = (
+            tp_threshold_df.stack()
+            .rename_axis(["event_day", "ticker"])
+            .rename("spread_cap")
+            .reorder_levels(["ticker", "event_day"])
+        )
+    else:
+        spread_df = None
+        illiquidity_threshold_by_event = None
+
     tmp_events, el, xl, es, xs = make_event_signal_matrices(
         index_df=index_df,
         px_close=px_close,
         p_primary=p_primary,
         horizon=horizon,
         side_threshold=side_threshold,
+        illiquidity_spread_df=spread_df,
+        illiquidity_threshold_by_event=illiquidity_threshold_by_event,
         debug=debug,
     )
 
