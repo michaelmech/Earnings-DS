@@ -122,3 +122,70 @@ def test_meta_cvs_composite_passes_min_max_slippage(monkeypatch):
         "min_slippage": 0.002,
         "max_slippage": 0.02,
     }
+
+
+def test_meta_cvs_passes_illiquidity_gate_kwargs(monkeypatch):
+    X, y, ds, px, tickers = _toy_inputs()
+    seen = {}
+    spread_df = px * 0.0001
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        seen["use_illiquidity_gate"] = kwargs.get("use_illiquidity_gate")
+        seen["illiquidity_spread_df"] = kwargs.get("illiquidity_spread_df")
+        seen["illiquidity_spread_kwargs"] = kwargs.get("illiquidity_spread_kwargs")
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+    monkeypatch.setattr(cv, "cvs", lambda *args, **kwargs: np.array([0.5, 0.6]))
+
+    cv.meta_cvs(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        use_illiquidity_gate=True,
+        illiquidity_spread_df=spread_df,
+        illiquidity_spread_kwargs={"window": 20},
+    )
+
+    assert seen["use_illiquidity_gate"] is True
+    assert seen["illiquidity_spread_df"] is spread_df
+    assert seen["illiquidity_spread_kwargs"] == {"window": 20}
+
+
+def test_meta_cvs_composite_passes_illiquidity_gate_kwargs(monkeypatch):
+    X, y, ds, px, tickers = _toy_inputs()
+    seen = {}
+    spread_df = px * 0.0002
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        seen["use_illiquidity_gate"] = kwargs.get("use_illiquidity_gate")
+        seen["illiquidity_spread_df"] = kwargs.get("illiquidity_spread_df")
+        seen["illiquidity_spread_kwargs"] = kwargs.get("illiquidity_spread_kwargs")
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+    monkeypatch.setattr(cv, "_cv_recall_skill", lambda *args, **kwargs: np.array([0.6]))
+    monkeypatch.setattr(cv, "_cv_average_precision_skill", lambda *args, **kwargs: np.array([0.8]))
+
+    cv.meta_cvs_composite(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        use_illiquidity_gate=True,
+        illiquidity_spread_df=spread_df,
+        illiquidity_spread_kwargs={"window": 10},
+    )
+
+    assert seen["use_illiquidity_gate"] is True
+    assert seen["illiquidity_spread_df"] is spread_df
+    assert seen["illiquidity_spread_kwargs"] == {"window": 10}
