@@ -267,6 +267,9 @@ def meta_cvs(
     primary_use_last_fold=False,
     meta_use_last_fold=False,
     return_primary_score=False,
+    min_slippage=None,
+    max_slippage=None,
+    smart_slippage_kwargs=None,
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -292,11 +295,18 @@ def meta_cvs(
 
   X=X.replace({np.inf: np.nan,-np.inf: np.nan})
 
+  merged_smart_slippage_kwargs = dict(smart_slippage_kwargs or {})
+  if min_slippage is not None:
+    merged_smart_slippage_kwargs['min_slippage'] = min_slippage
+  if max_slippage is not None:
+    merged_smart_slippage_kwargs['max_slippage'] = max_slippage
+
   X_meta,y_meta=run_primary_plus_meta(
           X.fillna(-999), y, ds, close,open_,high,low,earnings_tickers,
           px_volume=volume,
           primary_model=primary_model,tp=tp,sl=sl,
-          score_mode=True,horizon=horizon
+          score_mode=True,horizon=horizon,
+          smart_slippage_kwargs=merged_smart_slippage_kwargs or None,
       )
 
   print(X_meta.shape,y_meta.shape,close.shape)
@@ -431,6 +441,9 @@ def meta_cvs_composite(
     primary_use_last_fold=False,
     meta_use_last_fold=False,
     return_component_scores=False,
+    min_slippage=None,
+    max_slippage=None,
+    smart_slippage_kwargs=None,
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -470,6 +483,12 @@ def meta_cvs_composite(
 
   primary_score = _aggregate_cv_scores(primary_scores, use_last_fold=primary_use_last_fold)
 
+  merged_smart_slippage_kwargs = dict(smart_slippage_kwargs or {})
+  if min_slippage is not None:
+    merged_smart_slippage_kwargs['min_slippage'] = min_slippage
+  if max_slippage is not None:
+    merged_smart_slippage_kwargs['max_slippage'] = max_slippage
+
   X_meta, y_meta = run_primary_plus_meta(
       X.fillna(-999),
       y,
@@ -485,6 +504,7 @@ def meta_cvs_composite(
       sl=sl,
       score_mode=True,
       horizon=horizon,
+      smart_slippage_kwargs=merged_smart_slippage_kwargs or None,
   )
 
   X_meta = X_meta.replace({np.inf: np.nan, -np.inf: np.nan})
