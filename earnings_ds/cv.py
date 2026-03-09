@@ -270,6 +270,9 @@ def meta_cvs(
     min_slippage=None,
     max_slippage=None,
     smart_slippage_kwargs=None,
+    use_illiquidity_gate=False,
+    illiquidity_spread_df=None,
+    illiquidity_spread_kwargs=None,
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -307,6 +310,9 @@ def meta_cvs(
           primary_model=primary_model,tp=tp,sl=sl,
           score_mode=True,horizon=horizon,
           smart_slippage_kwargs=merged_smart_slippage_kwargs or None,
+          use_illiquidity_gate=use_illiquidity_gate,
+          illiquidity_spread_df=illiquidity_spread_df,
+          illiquidity_spread_kwargs=illiquidity_spread_kwargs,
       )
 
   print(X_meta.shape,y_meta.shape,close.shape)
@@ -444,6 +450,9 @@ def meta_cvs_composite(
     min_slippage=None,
     max_slippage=None,
     smart_slippage_kwargs=None,
+    use_illiquidity_gate=False,
+    illiquidity_spread_df=None,
+    illiquidity_spread_kwargs=None,
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -505,6 +514,9 @@ def meta_cvs_composite(
       score_mode=True,
       horizon=horizon,
       smart_slippage_kwargs=merged_smart_slippage_kwargs or None,
+      use_illiquidity_gate=use_illiquidity_gate,
+      illiquidity_spread_df=illiquidity_spread_df,
+      illiquidity_spread_kwargs=illiquidity_spread_kwargs,
   )
 
   X_meta = X_meta.replace({np.inf: np.nan, -np.inf: np.nan})
