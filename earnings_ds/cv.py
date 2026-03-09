@@ -201,10 +201,10 @@ def cvs(X, y, model=None, std=False, return_scores=False, label='CV'):
     model = LGBMClassifier(verbose=-1)
 
   X=X.replace({np.inf: np.nan,-np.inf: np.nan})
-  cv=PurgedTimeSeriesSplit(dates=pd.Series(X.index.get_level_values('earnings_ts')),gap=121)
-
   X=X.sort_index(level='earnings_ts')
   y=y.loc[X.index]
+
+  cv=PurgedTimeSeriesSplit(dates=pd.Series(X.index.get_level_values('earnings_ts')),gap=121)
 
   scores=cross_val_score(model,X.fillna(-999),y,scoring='average_precision',error_score='raise',cv=cv)#np.mean(
   print(f'{label} average_precision scores:', scores)
