@@ -207,6 +207,7 @@ def cvs(X, y, model=None, std=False, return_scores=False):
   y=y.loc[X.index]
 
   scores=cross_val_score(model,X.fillna(-999),y,scoring='average_precision',error_score='raise',cv=cv)#np.mean(
+  print('CV average_precision scores:', scores)
 
   if return_scores:
     return scores
@@ -274,7 +275,8 @@ def meta_cvs(
     meta_model = make_pipeline(SimpleImputer(fill_value=-999), LogisticRegression())
 
   if primary_cvs:
-    print(cvs(X.fillna(-999), y, primary_model))
+    primary_scores = cvs(X.fillna(-999), y, primary_model, return_scores=True)
+    print('Primary CV mean average_precision:', primary_scores.mean())
 
   X=X.replace({np.inf: np.nan,-np.inf: np.nan})
 
@@ -290,6 +292,7 @@ def meta_cvs(
   X_meta=X_meta.replace({np.inf: np.nan,-np.inf: np.nan})
 
   score = cvs(X_meta.fillna(-999), y_meta, meta_model,return_scores=True)
+  print('Meta CV scores distribution:', score)
 
   return score
 
