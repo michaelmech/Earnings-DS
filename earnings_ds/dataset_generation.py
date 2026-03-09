@@ -882,6 +882,80 @@ def get_ohlcv(
     return close, high, low, open_, volume
 
 
+def update_ohlcv_incremental(
+    tickers,
+    close=None,
+    high=None,
+    low=None,
+    open_=None,
+    volume=None,
+    end=None,
+    use_adj_close=True,
+    ffill_limit=3,
+    refresh_lookback_days=10,
+):
+    """
+    Incrementally refresh OHLCV by re-downloading only a short trailing window.
+
+    Why this is useful:
+      - first run can fetch a long history once
+      - subsequent runs refresh only the most recent days (including today),
+        while preserving the historical panel already in memory/storage
+
+    Returns:
+        close, high, low, open_, volume   (all pd.DataFrame)
+    """
+
+    frames = [close, high, low, open_, volume]
+    existing_index = [f.index.max() for f in frames if isinstance(f, pd.DataFrame) and not f.empty]
+
+    # If there is no prior panel, fall back to a full pull from default start.
+    if not existing_index:
+        return get_ohlcv(
+            tickers=tickers,
+            start="1998-01-01",
+            end=end,
+            use_adj_close=use_adj_close,
+            ffill_limit=ffill_limit,
+        )
+
+    last_ts = pd.to_datetime(max(existing_index)).tz_localize(None)
+    refresh_start = (last_ts - pd.Timedelta(days=refresh_lookback_days)).strftime("%Y-%m-%d")
+
+    new_close, new_high, new_low, new_open, new_volume = get_ohlcv(
+        tickers=tickers,
+        start=refresh_start,
+        end=end,
+        use_adj_close=use_adj_close,
+        ffill_limit=ffill_limit,
+    )
+
+    def _merge(old_df, new_df):
+        if old_df is None or old_df.empty:
+            return new_df
+        if new_df is None or new_df.empty:
+            return old_df
+
+        old_df = old_df.copy()
+        cutoff = pd.to_datetime(refresh_start)
+        old_df = old_df.loc[old_df.index < cutoff]
+
+        merged = pd.concat([old_df, new_df], axis=0).sort_index()
+        merged = merged[~merged.index.duplicated(keep="last")]
+
+        # keep requested ticker order and include any newly requested ticker columns
+        ordered_cols = [t for t in tickers if t in merged.columns]
+        return merged.reindex(columns=ordered_cols)
+
+    close_m = _merge(close, new_close)
+    high_m = _merge(high, new_high)
+    low_m = _merge(low, new_low)
+    open_m = _merge(open_, new_open)
+    volume_m = _merge(volume, new_volume)
+
+    return close_m, high_m, low_m, open_m, volume_m
+
+
 def derive_exit_labels_first_touch_approx(
     X: pd.DataFrame,
     open_df: pd.DataFrame,
@@ -1069,5 +1143,4 @@ def derive_exit_labels_first_touch_approx(
     out["exit_day"] = exit_day_list
     out["y_tp_first"] = np.where(valid, (out["exit_code"] == 1).astype(float), np.nan)
     return out
-
 
