@@ -370,3 +370,242 @@ def run_primary_plus_meta(
         'X_meta': X_meta,
         'y_meta': y_meta
     }
+
+
+
+def derive_meta_test_predictions(
+    X_train,
+    y_train,
+    train_data_with_event_day,
+    X_test,
+    test_data_with_event_day,
+    px_close,
+    px_open,
+    px_high,
+    px_low,
+    px_volume=None,
+    horizon=5,
+    primary_model=None,
+    meta_model=None,
+    side_threshold=0.5,
+    meta_threshold=0.5,
+    meta_min_abs_ret=0.0,
+    gap=121,
+    sl=0.032,
+    tp=0.032,
+    long_only=True,
+    drop_feats=('UBX', 'BTCUSD'),
+    use_smart_slippage=True,
+    smart_slippage_kwargs=None,
+):
+    """Train primary+meta on train split and score a fixed test split.
+
+    This mirrors ``run_primary_plus_meta`` but avoids synthetic-live dataset generation
+    and instead returns predictions + evaluation artifacts for a provided test set.
+    """
+    if primary_model is None:
+        primary_model = LGBMClassifier(verbose=-1)
+    if meta_model is None:
+        meta_model = make_pipeline(SimpleImputer(fill_value=-999), LogisticRegression())
+
+    X_train = X_train.replace({np.inf: np.nan, -np.inf: np.nan}).copy().fillna(-999)
+    X_test = X_test.replace({np.inf: np.nan, -np.inf: np.nan}).copy().fillna(-999)
+
+    if drop_feats:
+        keep_cols = [c for c in X_train.columns if not any(k in c for k in drop_feats)]
+        X_train = X_train[keep_cols]
+        X_test = X_test.reindex(columns=keep_cols, fill_value=-999)
+
+    def _normalize_ohlc_index(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        out.index = pd.to_datetime(out.index).normalize()
+        return out.sort_index()
+
+    px_open = _normalize_ohlc_index(px_open)
+    px_high = _normalize_ohlc_index(px_high)
+    px_low = _normalize_ohlc_index(px_low)
+    px_close = _normalize_ohlc_index(px_close)
+    if px_volume is not None:
+        px_volume = _normalize_ohlc_index(px_volume)
+
+    train_dates = pd.to_datetime(X_train.index.get_level_values('earnings_ts'))
+    test_dates = pd.to_datetime(X_test.index.get_level_values('earnings_ts'))
+
+    def _filter_ohlc(start_date, end_date, *dfs):
+        buffer = pd.Timedelta(days=horizon + 10)
+        out = []
+        for df in dfs:
+            out.append(df.truncate(before=start_date - buffer, after=end_date + buffer))
+        return out
+
+    px_open_train, px_high_train, px_low_train, px_close_train = _filter_ohlc(
+        train_dates.min(), train_dates.max(), px_open, px_high, px_low, px_close
+    )
+    px_open_test, px_high_test, px_low_test, px_close_test = _filter_ohlc(
+        test_dates.min(), test_dates.max(), px_open, px_high, px_low, px_close
+    )
+
+    px_volume_train = px_volume_test = None
+    if px_volume is not None:
+        (px_volume_train,) = _filter_ohlc(train_dates.min(), train_dates.max(), px_volume)
+        (px_volume_test,) = _filter_ohlc(test_dates.min(), test_dates.max(), px_volume)
+
+    dates = pd.Series(pd.to_datetime(X_train.index.get_level_values('earnings_ts')))
+    cv = PurgedTimeSeriesSplit(dates=dates, gap=gap)
+
+    p_oof_train = cv_predict_proba_purged(primary_model, X_train, y_train, cv).loc[X_train.index]
+
+    d_train = train_data_with_event_day.copy()
+    d_train['earnings_ts'] = pd.to_datetime(d_train['earnings_ts'])
+    d_train['event_day'] = pd.to_datetime(d_train['event_day'])
+    d_train = d_train.set_index(['ticker', 'earnings_ts']).sort_index().reindex(X_train.index)
+    idx_train = d_train[['event_day']].copy()
+
+    events_train, tmp_events_train, trades_train, el_train, xl_train, es_train, xs_train = simulate_event_returns_from_proba(
+        index_df=idx_train,
+        p_primary=p_oof_train,
+        px_open=px_open_train,
+        px_high=px_high_train,
+        px_low=px_low_train,
+        px_close=px_close_train,
+        px_volume=px_volume_train,
+        horizon=horizon,
+        side_threshold=side_threshold,
+        tp=tp,
+        sl=sl,
+        long_only=long_only,
+        use_smart_slippage=use_smart_slippage,
+        smart_slippage_kwargs=smart_slippage_kwargs,
+    )
+
+    trade_ret_train = events_train['trade_ret'].dropna()
+    common_idx = X_train.index.intersection(trade_ret_train.index)
+
+    X_meta_base = X_train.loc[common_idx]
+    p_oof_ok = p_oof_train.loc[common_idx]
+    trade_ret_train = trade_ret_train.loc[common_idx]
+
+    if long_only:
+        long_mask = p_oof_ok >= side_threshold
+        X_meta_base = X_meta_base.loc[long_mask]
+        p_oof_ok = p_oof_ok.loc[long_mask]
+        trade_ret_train = trade_ret_train.loc[long_mask]
+
+    X_meta_train, y_meta_train = build_meta_dataset(
+        X=X_meta_base,
+        p_primary=p_oof_ok,
+        trade_ret=trade_ret_train,
+        min_abs_ret=meta_min_abs_ret,
+    )
+
+    primary_fit = primary_model
+    primary_fit.fit(X_train, y_train)
+
+    meta_fit = meta_model
+    meta_fit.fit(X_meta_train, y_meta_train)
+
+    p_primary_test = pd.Series(primary_fit.predict_proba(X_test)[:, 1], index=X_test.index)
+    X_meta_test = X_test.copy()
+    X_meta_test['p_primary'] = p_primary_test
+    p_meta_test = pd.Series(
+        meta_fit.predict_proba(X_meta_test[X_meta_train.columns])[:, 1],
+        index=X_test.index,
+    )
+
+    d_test = test_data_with_event_day.copy()
+    d_test['earnings_ts'] = pd.to_datetime(d_test['earnings_ts'])
+    d_test['event_day'] = pd.to_datetime(d_test['event_day'])
+    d_test = d_test.set_index(['ticker', 'earnings_ts']).sort_index().reindex(X_test.index)
+    idx_test = d_test[['event_day']].copy()
+
+    events_test, tmp_events_test, trades_test, el_test, xl_test, es_test, xs_test = simulate_event_returns_from_proba(
+        index_df=idx_test,
+        p_primary=p_primary_test,
+        px_open=px_open_test,
+        px_high=px_high_test,
+        px_low=px_low_test,
+        px_close=px_close_test,
+        px_volume=px_volume_test,
+        horizon=horizon,
+        side_threshold=side_threshold,
+        tp=tp,
+        sl=sl,
+        long_only=long_only,
+        use_smart_slippage=use_smart_slippage,
+        smart_slippage_kwargs=smart_slippage_kwargs,
+    )
+
+    events_test = events_test.copy()
+    events_test['p_meta'] = p_meta_test.reindex(events_test.index)
+    signed = (events_test['p_primary'] * 2.0 - 1.0)
+    if long_only:
+        signed = signed.clip(lower=0.0)
+    events_test['size'] = signed * events_test['p_meta']
+    events_test['weighted_trade_ret'] = events_test['trade_ret'] * events_test['size']
+
+    take_mask = p_meta_test >= meta_threshold
+    gated_idx = idx_test.loc[take_mask.reindex(idx_test.index).fillna(False)]
+    gated_p_primary = p_primary_test.loc[gated_idx.index]
+
+    events_test_meta_gated, tmp_events_gated, trades_gated, el_gated, xl_gated, es_gated, xs_gated = simulate_event_returns_from_proba(
+        index_df=gated_idx,
+        p_primary=gated_p_primary,
+        px_open=px_open_test,
+        px_high=px_high_test,
+        px_low=px_low_test,
+        px_close=px_close_test,
+        px_volume=px_volume_test,
+        horizon=horizon,
+        side_threshold=side_threshold,
+        tp=tp,
+        sl=sl,
+        long_only=long_only,
+        use_smart_slippage=use_smart_slippage,
+        smart_slippage_kwargs=smart_slippage_kwargs,
+    )
+    events_test_meta_gated = events_test_meta_gated.copy()
+    events_test_meta_gated['p_meta'] = p_meta_test.reindex(events_test_meta_gated.index)
+    signed_gated = (events_test_meta_gated['p_primary'] * 2.0 - 1.0)
+    if long_only:
+        signed_gated = signed_gated.clip(lower=0.0)
+    events_test_meta_gated['size'] = signed_gated * events_test_meta_gated['p_meta']
+    events_test_meta_gated['weighted_trade_ret'] = (
+        events_test_meta_gated['trade_ret'] * events_test_meta_gated['size']
+    )
+
+    test_scores = pd.DataFrame({'p_primary': p_primary_test, 'p_meta': p_meta_test})
+    test_scores['size'] = (test_scores['p_primary'] * 2.0 - 1.0) * test_scores['p_meta']
+    if long_only:
+        test_scores['size'] = test_scores['size'].clip(lower=0.0)
+
+    daily_meta_backtest = (
+        events_test_meta_gated.reset_index()
+        .assign(event_day=lambda d: pd.to_datetime(d['event_day']).dt.normalize())
+        .groupby('event_day', as_index=True)['weighted_trade_ret']
+        .sum()
+        .sort_index()
+        .rename('daily_weighted_ret')
+        .to_frame()
+    )
+    daily_meta_backtest['equity_curve'] = (1.0 + daily_meta_backtest['daily_weighted_ret'].fillna(0.0)).cumprod()
+
+    return test_scores.sort_values('size', ascending=False), {
+        'p_oof_train': p_oof_train,
+        'X_meta_train': X_meta_train,
+        'y_meta_train': y_meta_train,
+        'events_train': events_train,
+        'events_test': events_test,
+        'events_test_meta_gated': events_test_meta_gated,
+        'daily_meta_backtest': daily_meta_backtest,
+        'primary_model': primary_fit,
+        'meta_model': meta_fit,
+        'tmp_events_train': tmp_events_train,
+        'trades_train': trades_train,
+        'signals_train': {'el': el_train, 'xl': xl_train, 'es': es_train, 'xs': xs_train},
+        'tmp_events_test': tmp_events_test,
+        'trades_test': trades_test,
+        'signals_test': {'el': el_test, 'xl': xl_test, 'es': es_test, 'xs': xs_test},
+        'tmp_events_gated': tmp_events_gated,
+        'trades_gated': trades_gated,
+        'signals_gated': {'el': el_gated, 'xl': xl_gated, 'es': es_gated, 'xs': xs_gated},
+    }
