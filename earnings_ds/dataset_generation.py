@@ -203,9 +203,7 @@ def add_earnings_edge_features(
 
             # realized reaction of each earnings (after-close -> measured from event-day close)
             react1 = close.shift(-1) / close - 1.0
-            react5 = close.shift(-5) / close - 1.0
             r1_e = react1.iloc[pos_e].to_numpy(dtype=float)
-            r5_e = react5.iloc[pos_e].to_numpy(dtype=float)
 
             # trailing stats across earnings events (computed at event granularity)
             s_r1 = pd.Series(r1_e)
@@ -215,7 +213,6 @@ def add_earnings_edge_features(
 
             # write these into daily index as step functions that update the DAY AFTER earnings
             prev_r1 = pd.Series(np.nan, index=idx)
-            prev_r5 = pd.Series(np.nan, index=idx)
             tr_mean4 = pd.Series(np.nan, index=idx)
             tr_std8 = pd.Series(np.nan, index=idx)
             tr_win8 = pd.Series(np.nan, index=idx)
@@ -224,13 +221,11 @@ def add_earnings_edge_features(
                 j = p + 1  # start using this info AFTER the reaction is known (next day) -> no leakage
                 if j < len(idx):
                     prev_r1.iloc[j] = r1_e[k]
-                    prev_r5.iloc[j] = r5_e[k]
                     tr_mean4.iloc[j] = mean4[k]
                     tr_std8.iloc[j] = std8[k]
                     tr_win8.iloc[j] = win8[k]
 
             df["prev_ea_react_1d"] = prev_r1.ffill()
-            df["prev_ea_react_5d"] = prev_r5.ffill()
             df["ea_trailing_mean_react1_4"] = tr_mean4.ffill()
             df["ea_trailing_std_react1_8"] = tr_std8.ffill()
             df["ea_trailing_winrate_8"] = tr_win8.ffill()
@@ -1143,4 +1138,3 @@ def derive_exit_labels_first_touch_approx(
     out["exit_day"] = exit_day_list
     out["y_tp_first"] = np.where(valid, (out["exit_code"] == 1).astype(float), np.nan)
     return out
-
