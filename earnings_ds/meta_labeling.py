@@ -144,7 +144,7 @@ def run_primary_plus_meta(
     px_close.index = pd.to_datetime(px_close.index).normalize()
 
     if score_mode:
-      print('Number of mismatched tickers:',set(ds['ticker'])-set(px_close))
+      print('Number of mismatched tickers:',set(data_with_event_day['ticker'])-set(px_close))
 
     # --- Purged CV object (you already do this) ---
     dates = pd.Series(X.index.get_level_values('earnings_ts'))
