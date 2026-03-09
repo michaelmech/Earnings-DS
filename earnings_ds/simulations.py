@@ -2,6 +2,37 @@ import numpy as np
 import pandas as pd
 import vectorbt as vbt
 
+
+def calculate_smart_slippage(
+    open_df: pd.DataFrame,
+    high_df: pd.DataFrame,
+    low_df: pd.DataFrame,
+    close_df: pd.DataFrame,
+    volume_df: pd.DataFrame,
+    size_frac: pd.DataFrame,
+    *,
+    init_cash: float = 100_000.0,
+    base_spread: float = 0.0002,
+    vol_mult: float = 0.1,
+    impact_mult: float = 0.1,
+    min_slippage: float = 0.0005,
+    max_slippage: float = 0.02,
+) -> pd.DataFrame:
+    """Estimate per-trade slippage with volatility + participation impact.
+
+    The output is a matrix with the same [date x ticker] shape as `size_frac`,
+    intended to be passed to vectorbt's `slippage` argument.
+    """
+    vol_comp = ((high_df - low_df) / open_df.replace(0.0, np.nan)) * float(vol_mult)
+
+    trade_dollar_val = size_frac * float(init_cash)
+    daily_dollar_volume = volume_df * close_df
+    participation_rate = (trade_dollar_val / daily_dollar_volume.replace(0.0, np.nan)).fillna(0.0)
+    impact_comp = float(impact_mult) * np.sqrt(participation_rate)
+
+    total_slippage = float(base_spread) + vol_comp + impact_comp
+    return total_slippage.clip(lower=float(min_slippage), upper=float(max_slippage)).fillna(0.0)
+
 def _dbg(msg: str, enabled: bool) -> None:
     if enabled:
         print(msg)
@@ -854,11 +885,14 @@ def simulate_event_returns_from_proba(
     px_high: pd.DataFrame,
     px_low: pd.DataFrame,
     px_close: pd.DataFrame,
+    px_volume: pd.DataFrame | None = None,
     horizon: int = 5,
     side_threshold: float = 0.5,
     tp: float = 0.032,
     sl: float = 0.032,
     long_only: bool = True,
+    use_smart_slippage: bool = True,
+    smart_slippage_kwargs: dict | None = None,
     debug: bool = False,
 ):
     """Run the canonical event->signals->vectorbt->event returns pipeline.
@@ -901,6 +935,9 @@ def simulate_event_returns_from_proba(
         exits_short=xs,
         tp=tp,
         sl=sl,
+        volume_df=px_volume,
+        use_smart_slippage=use_smart_slippage,
+        smart_slippage_kwargs=smart_slippage_kwargs,
         debug=debug,
     )
 
@@ -911,8 +948,11 @@ def simulate_event_returns_from_proba(
 def vectorbt_trade_returns_gapaware(
     open_df, high_df, low_df, close_df,
     entries_long, exits_long, entries_short, exits_short,
+    volume_df=None,
     tp=0.02, sl=0.01, init_cash=1.0,
     stop_exits_on_open_only: bool = True,
+    use_smart_slippage: bool = True,
+    smart_slippage_kwargs: dict | None = None,
     debug=False,
     debug_show_examples=5,
 ):
@@ -934,6 +974,21 @@ def vectorbt_trade_returns_gapaware(
     w_sum = w_raw.sum(axis=1).replace(0.0, np.nan)
     size_frac = w_raw.div(w_sum, axis=0).fillna(0.0)
     size_frac = size_frac.where((entries_long | entries_short), 0.0)
+
+    slippage_value: float | pd.DataFrame
+    if use_smart_slippage and volume_df is not None:
+        slippage_value = calculate_smart_slippage(
+            open_df=open_df,
+            high_df=high_df,
+            low_df=low_df,
+            close_df=close_df,
+            volume_df=volume_df.reindex_like(close_df),
+            size_frac=size_frac,
+            init_cash=init_cash,
+            **(smart_slippage_kwargs or {}),
+        )
+    else:
+        slippage_value = 0.0
 
     pf = vbt.Portfolio.from_signals(
         close=close_df,
@@ -963,7 +1018,7 @@ def vectorbt_trade_returns_gapaware(
         init_cash=init_cash,
         cash_sharing=True,
         fees=0.0,
-        slippage=0.0,
+        slippage=slippage_value,
         freq="1D",
         direction="both"
     )
