@@ -195,7 +195,7 @@ def rolling_window_classifier_consistency_check(
     return pd.DataFrame(results)
 
 
-def cvs(X, y, model=None, std=False, return_scores=False):
+def cvs(X, y, model=None, std=False, return_scores=False, label='CV'):
 
   if model is None:
     model = LGBMClassifier(verbose=-1)
@@ -207,7 +207,7 @@ def cvs(X, y, model=None, std=False, return_scores=False):
   y=y.loc[X.index]
 
   scores=cross_val_score(model,X.fillna(-999),y,scoring='average_precision',error_score='raise',cv=cv)#np.mean(
-  print('CV average_precision scores:', scores)
+  print(f'{label} average_precision scores:', scores)
 
   if return_scores:
     return scores
@@ -264,6 +264,9 @@ def meta_cvs(
     sl=0.03,
     primary_cvs=False,
     horizon=5,
+    primary_use_last_fold=False,
+    meta_use_last_fold=False,
+    return_primary_score=False,
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -274,9 +277,18 @@ def meta_cvs(
   if meta_model is None:
     meta_model = make_pipeline(SimpleImputer(fill_value=-999), LogisticRegression())
 
+  primary_score = None
   if primary_cvs:
-    primary_scores = cvs(X.fillna(-999), y, primary_model, return_scores=True)
-    print('Primary CV mean average_precision:', primary_scores.mean())
+    primary_scores = cvs(
+        X.fillna(-999),
+        y,
+        primary_model,
+        return_scores=True,
+        label='Primary CV',
+    )
+    primary_score = _aggregate_cv_scores(primary_scores, use_last_fold=primary_use_last_fold)
+    summary_name = 'last fold' if primary_use_last_fold else 'mean'
+    print(f'Primary CV {summary_name} average_precision:', primary_score)
 
   X=X.replace({np.inf: np.nan,-np.inf: np.nan})
 
@@ -291,10 +303,28 @@ def meta_cvs(
 
   X_meta=X_meta.replace({np.inf: np.nan,-np.inf: np.nan})
 
-  score = cvs(X_meta.fillna(-999), y_meta, meta_model,return_scores=True)
-  print('Meta CV scores distribution:', score)
+  meta_scores = cvs(
+      X_meta.fillna(-999),
+      y_meta,
+      meta_model,
+      return_scores=True,
+      label='Meta CV',
+  )
+  meta_score = _aggregate_cv_scores(meta_scores, use_last_fold=meta_use_last_fold)
 
-  return score
+  if meta_use_last_fold:
+    print('Meta CV last fold average_precision:', meta_score)
+
+  if return_primary_score:
+    return {
+        'primary_score': primary_score,
+        'meta_score': meta_score if meta_use_last_fold else meta_scores,
+    }
+
+  if meta_use_last_fold:
+    return meta_score
+
+  return meta_scores
 
 
 def _fold_imbalance_penalty(y_true, min_fold_pos_rate):
@@ -310,7 +340,7 @@ def _fold_imbalance_penalty(y_true, min_fold_pos_rate):
   return float(max(0.0, min(1.0, left, right)))
 
 
-def _cv_recall_skill(model, X, y, cv, min_fold_pos_rate=0.05):
+def _cv_recall_skill(model, X, y, cv, min_fold_pos_rate=0.05, return_fold_scores=False):
   """Chance-corrected recall using predicted-positive rate as baseline."""
   scores = []
 
@@ -333,10 +363,14 @@ def _cv_recall_skill(model, X, y, cv, min_fold_pos_rate=0.05):
     imbalance_penalty = _fold_imbalance_penalty(y_te, min_fold_pos_rate)
     scores.append(np.clip(recall_skill, 0.0, 1.0) * imbalance_penalty)
 
+  scores = np.asarray(scores, dtype=float)
+  if return_fold_scores:
+    return scores
+
   return float(np.mean(scores))
 
 
-def _cv_average_precision_skill(model, X, y, cv, min_fold_pos_rate=0.05):
+def _cv_average_precision_skill(model, X, y, cv, min_fold_pos_rate=0.05, return_fold_scores=False):
   """Chance-corrected average precision using prevalence as baseline."""
   scores = []
 
@@ -358,7 +392,23 @@ def _cv_average_precision_skill(model, X, y, cv, min_fold_pos_rate=0.05):
     imbalance_penalty = _fold_imbalance_penalty(y_te, min_fold_pos_rate)
     scores.append(np.clip(ap_skill, 0.0, 1.0) * imbalance_penalty)
 
+  scores = np.asarray(scores, dtype=float)
+  if return_fold_scores:
+    return scores
+
   return float(np.mean(scores))
+
+
+def _aggregate_cv_scores(scores, use_last_fold=False):
+  scores = np.asarray(scores, dtype=float)
+
+  if scores.size == 0:
+    return np.nan
+
+  if use_last_fold:
+    return float(scores[-1])
+
+  return float(scores.mean())
 
 
 def meta_cvs_composite(
@@ -378,6 +428,9 @@ def meta_cvs_composite(
     horizon=5,
     adjust_for_imbalance=True,
     min_fold_pos_rate=0.05,
+    primary_use_last_fold=False,
+    meta_use_last_fold=False,
+    return_component_scores=False,
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -397,22 +450,25 @@ def meta_cvs_composite(
   y_primary = y.loc[X_primary.index]
 
   if adjust_for_imbalance:
-    primary_score = _cv_recall_skill(
+    primary_scores = _cv_recall_skill(
         primary_model,
         X_primary.fillna(-999),
         y_primary,
         primary_cv,
         min_fold_pos_rate=min_fold_pos_rate,
+        return_fold_scores=True,
     )
   else:
-    primary_score = cross_val_score(
+    primary_scores = cross_val_score(
         primary_model,
         X_primary.fillna(-999),
         y_primary,
         scoring='recall',
         error_score='raise',
         cv=primary_cv,
-    ).mean()
+    )
+
+  primary_score = _aggregate_cv_scores(primary_scores, use_last_fold=primary_use_last_fold)
 
   X_meta, y_meta = run_primary_plus_meta(
       X.fillna(-999),
@@ -441,21 +497,36 @@ def meta_cvs_composite(
   )
 
   if adjust_for_imbalance:
-    meta_score = _cv_average_precision_skill(
+    meta_scores = _cv_average_precision_skill(
         meta_model,
         X_meta.fillna(-999),
         y_meta,
         meta_cv,
         min_fold_pos_rate=min_fold_pos_rate,
+        return_fold_scores=True,
     )
   else:
-    meta_score = cvs(
+    meta_scores = cvs(
         X_meta.fillna(-999),
         y_meta,
         meta_model,
+        return_scores=True,
+        label='Meta CV',
     )
 
-  return (primary_score + meta_score) / 2
+  meta_score = _aggregate_cv_scores(meta_scores, use_last_fold=meta_use_last_fold)
+  composite_score = (primary_score + meta_score) / 2
+
+  if return_component_scores:
+    return {
+        'composite_score': composite_score,
+        'primary_score': primary_score,
+        'meta_score': meta_score,
+        'primary_fold_scores': np.asarray(primary_scores, dtype=float),
+        'meta_fold_scores': np.asarray(meta_scores, dtype=float),
+    }
+
+  return composite_score
 
 
 def cv_predict_proba_purged(model, X, y, cv):
