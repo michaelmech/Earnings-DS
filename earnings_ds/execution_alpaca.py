@@ -107,6 +107,52 @@ def _is_trading_halt_market_reject(payload: dict) -> bool:
     return payload.get("code") == 42210000 and "trading halt" in msg and "limit order" in msg
 
 
+def _passes_spread_gate(
+    row: pd.Series,
+    *,
+    spread_multiplier: float | None,
+    current_price_col: str,
+    current_spread_col: str,
+) -> tuple[bool, dict]:
+    """Check whether spread gate allows order execution."""
+    if spread_multiplier is None:
+        return True, {}
+
+    if current_price_col not in row.index or current_spread_col not in row.index:
+        return False, {
+            "reason": "missing_spread_inputs",
+            "required_columns": [current_price_col, current_spread_col],
+        }
+
+    px = row.get(current_price_col)
+    spread = row.get(current_spread_col)
+
+    if pd.isna(px) or pd.isna(spread):
+        return False, {
+            "reason": "nan_spread_inputs",
+            "current_price": px,
+            "current_spread": spread,
+        }
+
+    px = float(px)
+    spread = float(spread)
+    threshold_value = float(spread_multiplier) * px
+
+    if threshold_value > spread:
+        return True, {
+            "threshold_value": threshold_value,
+            "current_price": px,
+            "current_spread": spread,
+        }
+
+    return False, {
+        "reason": "spread_gate_blocked",
+        "threshold_value": threshold_value,
+        "current_price": px,
+        "current_spread": spread,
+    }
+
+
 def rebalance_to_targets(
     df_targets: pd.DataFrame,
     *,
@@ -122,6 +168,9 @@ def rebalance_to_targets(
     cancel_blocking_orders: bool = True,
     halt_fallback_to_limit: bool = True,
     halt_limit_price_col: str = "entry",  # use your entry column as limit on halts
+    spread_multiplier: float | None = None,
+    current_price_col: str = "current_price",
+    current_spread_col: str = "current_spread",
 ):
     required = {target_qty_col, take_profit_col, stop_loss_col}
     missing = sorted(required - set(df_targets.columns))
@@ -153,6 +202,17 @@ def rebalance_to_targets(
 
         if abs(delta) < 1e-9:
             results.append({"symbol": symbol, "cur_qty": cur_qty, "target_qty": target_qty, "delta": 0.0, "action": "none"})
+            continue
+
+        pass_gate, gate_info = _passes_spread_gate(
+            row,
+            spread_multiplier=spread_multiplier,
+            current_price_col=current_price_col,
+            current_spread_col=current_spread_col,
+        )
+        if not pass_gate:
+            results.append({"symbol": symbol, "cur_qty": cur_qty, "target_qty": target_qty, "delta": delta,
+                            "action": "skip_spread_gate", **gate_info})
             continue
 
         # -------- SELL delta (reduce) --------
@@ -267,6 +327,9 @@ def submit_brackets_from_df(
     use_market_entries: bool = True,
     tif: TimeInForce = TimeInForce.GTC,
     paper: bool = True,
+    spread_multiplier: float | None = None,
+    current_price_col: str = "current_price",
+    current_spread_col: str = "current_spread",
 ):
     """
     Assumes ticker symbol is df.index (e.g., df.index = ["AAPL","MSFT",...])
@@ -290,6 +353,25 @@ def submit_brackets_from_df(
         qty = float(row[qty_col])
         tp = float(row[take_profit_col])
         sl = float(row[stop_loss_col])
+
+        pass_gate, gate_info = _passes_spread_gate(
+            row,
+            spread_multiplier=spread_multiplier,
+            current_price_col=current_price_col,
+            current_spread_col=current_spread_col,
+        )
+        if not pass_gate:
+            results.append({
+                "symbol": str(symbol),
+                "qty": qty,
+                "entry_type": "market" if use_market_entries else "limit",
+                "take_profit": tp,
+                "stop_loss": sl,
+                "status": "skipped",
+                "action": "skip_spread_gate",
+                **gate_info,
+            })
+            continue
 
         if qty <= 0:
             raise ValueError(f"{symbol}: qty must be > 0 (got {qty})")
