@@ -113,30 +113,50 @@ def _passes_spread_gate(
     spread_multiplier: float | None,
     current_price_col: str,
     current_spread_col: str,
+    bid_price_col: str = "bid_price",
+    ask_price_col: str = "ask_price",
+    spread_cap_col: str | None = None,
 ) -> tuple[bool, dict]:
     """Check whether spread gate allows order execution."""
-    if spread_multiplier is None:
-        return True, {}
-
-    if current_price_col not in row.index or current_spread_col not in row.index:
-        return False, {
-            "reason": "missing_spread_inputs",
-            "required_columns": [current_price_col, current_spread_col],
-        }
-
     px = row.get(current_price_col)
     spread = row.get(current_spread_col)
 
-    if pd.isna(px) or pd.isna(spread):
+    if pd.isna(spread):
+        bid = row.get(bid_price_col)
+        ask = row.get(ask_price_col)
+        if pd.notna(bid) and pd.notna(ask):
+            spread = float(ask) - float(bid)
+
+    if pd.isna(px):
+        mid_px = row.get(current_price_col)
+        bid = row.get(bid_price_col)
+        ask = row.get(ask_price_col)
+        if pd.notna(mid_px):
+            px = mid_px
+        elif pd.notna(bid) and pd.notna(ask):
+            px = (float(ask) + float(bid)) / 2.0
+
+    threshold_value = None
+    if spread_cap_col is not None and spread_cap_col in row.index and pd.notna(row.get(spread_cap_col)):
+        threshold_value = float(row.get(spread_cap_col))
+    elif spread_multiplier is not None:
+        if pd.isna(px):
+            return False, {
+                "reason": "missing_spread_inputs",
+                "required_columns": [current_price_col, current_spread_col, bid_price_col, ask_price_col],
+            }
+        threshold_value = float(spread_multiplier) * float(px)
+    else:
+        return True, {}
+
+    if pd.isna(spread):
         return False, {
             "reason": "nan_spread_inputs",
             "current_price": px,
             "current_spread": spread,
         }
 
-    px = float(px)
     spread = float(spread)
-    threshold_value = float(spread_multiplier) * px
 
     if threshold_value > spread:
         return True, {
@@ -171,6 +191,9 @@ def rebalance_to_targets(
     spread_multiplier: float | None = None,
     current_price_col: str = "current_price",
     current_spread_col: str = "current_spread",
+    bid_price_col: str = "bid_price",
+    ask_price_col: str = "ask_price",
+    spread_cap_col: str | None = None,
 ):
     required = {target_qty_col, take_profit_col, stop_loss_col}
     missing = sorted(required - set(df_targets.columns))
@@ -209,6 +232,9 @@ def rebalance_to_targets(
             spread_multiplier=spread_multiplier,
             current_price_col=current_price_col,
             current_spread_col=current_spread_col,
+            bid_price_col=bid_price_col,
+            ask_price_col=ask_price_col,
+            spread_cap_col=spread_cap_col,
         )
         if not pass_gate:
             results.append({"symbol": symbol, "cur_qty": cur_qty, "target_qty": target_qty, "delta": delta,
@@ -330,6 +356,9 @@ def submit_brackets_from_df(
     spread_multiplier: float | None = None,
     current_price_col: str = "current_price",
     current_spread_col: str = "current_spread",
+    bid_price_col: str = "bid_price",
+    ask_price_col: str = "ask_price",
+    spread_cap_col: str | None = None,
 ):
     """
     Assumes ticker symbol is df.index (e.g., df.index = ["AAPL","MSFT",...])
@@ -359,6 +388,9 @@ def submit_brackets_from_df(
             spread_multiplier=spread_multiplier,
             current_price_col=current_price_col,
             current_spread_col=current_spread_col,
+            bid_price_col=bid_price_col,
+            ask_price_col=ask_price_col,
+            spread_cap_col=spread_cap_col,
         )
         if not pass_gate:
             results.append({
@@ -407,5 +439,4 @@ def submit_brackets_from_df(
         )
 
     return pd.DataFrame(results).set_index("symbol")
-
 
