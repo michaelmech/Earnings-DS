@@ -856,10 +856,12 @@ def make_event_signal_matrices(
     long_mask = tmp['p_primary'] >= side_threshold
 
     blocked_by_illiquidity = 0
+    skipped_missing_ticker = 0
 
     for (tkr, ets), row in tmp.iterrows():
         d = row['event_day_use']
         if tkr not in tickers:
+            skipped_missing_ticker += 1
             continue
 
         if illiquidity_spread_df is not None and illiquidity_threshold_by_event is not None:
@@ -874,8 +876,14 @@ def make_event_signal_matrices(
         else:
             entries_short.loc[d, tkr] = True
 
-    if debug and illiquidity_spread_df is not None and illiquidity_threshold_by_event is not None:
-        print(f"[illiquidity gate] blocked events: {blocked_by_illiquidity}")
+    if debug:
+        total_events = len(tmp)
+        total_entries = int(entries_long.values.sum() + entries_short.values.sum())
+        print(f"[gate debug] total_events={total_events} entries_after_gates={total_entries}")
+        if skipped_missing_ticker:
+            print(f"[gate debug] skipped_missing_ticker={skipped_missing_ticker}")
+        if illiquidity_spread_df is not None and illiquidity_threshold_by_event is not None:
+            print(f"[illiquidity gate] blocked events: {blocked_by_illiquidity}")
 
     exits_long  = entries_long.vbt.signals.fshift(horizon, fill_value=False)
     exits_short = entries_short.vbt.signals.fshift(horizon, fill_value=False)

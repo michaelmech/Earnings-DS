@@ -134,6 +134,7 @@ def run_primary_plus_meta(
     use_illiquidity_gate=False,
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
+    gate_debug=False,
 ):
     if primary_model is None:
         primary_model = LGBMClassifier(verbose=-1)
@@ -219,6 +220,7 @@ def run_primary_plus_meta(
         use_illiquidity_gate=use_illiquidity_gate,
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+        debug=gate_debug,
         return_pf=True,
     )
 
@@ -417,6 +419,7 @@ def run_primary_plus_meta(
         side_threshold=side_threshold,
         illiquidity_spread_df=spread_df,
         illiquidity_threshold_by_event=illiquidity_threshold_by_event,
+        debug=gate_debug,
     )
 
     if long_only:
@@ -452,6 +455,10 @@ def run_primary_plus_meta(
     }).sort_values('size', ascending=False)
 
     out['is_tradable'] = tradable_mask.reindex(out.index).fillna(False)
+    if gate_debug:
+        blocked = int((~out['is_tradable']).sum())
+        allowed = int(out['is_tradable'].sum())
+        print(f"[run_primary_plus_meta gate debug] allowed={allowed} blocked={blocked}")
     out = out.loc[out['is_tradable']].copy()
 
     return out, {
@@ -490,6 +497,7 @@ def derive_meta_test_predictions(
     use_illiquidity_gate=False,
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
+    gate_debug=False,
 ):
     """Train primary+meta on train split and score a fixed test split.
 
@@ -572,6 +580,7 @@ def derive_meta_test_predictions(
         use_illiquidity_gate=use_illiquidity_gate,
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+        debug=gate_debug,
         return_pf=True,
     )
 
@@ -633,6 +642,7 @@ def derive_meta_test_predictions(
         use_illiquidity_gate=use_illiquidity_gate,
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+        debug=gate_debug,
         return_pf=True,
     )
 
@@ -666,6 +676,7 @@ def derive_meta_test_predictions(
         use_illiquidity_gate=use_illiquidity_gate,
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+        debug=gate_debug,
         return_pf=True,
     )
     events_test_meta_gated = events_test_meta_gated.copy()
