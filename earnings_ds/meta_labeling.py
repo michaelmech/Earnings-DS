@@ -13,6 +13,40 @@ from .simulations import (
     simulate_event_returns_from_proba,
 )
 
+
+def size_from_run_primary_out(
+    out: pd.DataFrame,
+    *,
+    weighting_scheme: str = "equal",
+    score_col: str = "size",
+    max_gross: float = 1.0,
+) -> pd.Series:
+    """Convert `run_primary_plus_meta` output into portfolio weights."""
+    if weighting_scheme not in ("equal", "score"):
+        raise ValueError("weighting_scheme must be 'equal' or 'score'")
+
+    if score_col not in out.columns:
+        raise ValueError(f"score_col '{score_col}' not found in out")
+
+    tradable = out.get("is_tradable", pd.Series(True, index=out.index)).astype(bool)
+    raw = out.loc[tradable, score_col].astype(float)
+    raw = raw.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    if raw.empty:
+        return pd.Series(0.0, index=out.index, name="weight")
+
+    if weighting_scheme == "equal":
+        direction = np.sign(raw).replace(0.0, 1.0)
+        per_name = float(max_gross) / float(len(raw))
+        sized = direction * per_name
+    else:
+        gross = raw.abs().sum()
+        sized = raw * (float(max_gross) / gross) if gross > 0 else raw * 0.0
+
+    weights = pd.Series(0.0, index=out.index, name="weight")
+    weights.loc[sized.index] = sized
+    return weights
+
 def size_from_probs(
     close: pd.DataFrame,          # date x ticker
     p_cal: pd.Series,             # index=ticker, values in (0,1)
@@ -134,6 +168,7 @@ def run_primary_plus_meta(
     use_illiquidity_gate=False,
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
+    weighting_scheme="equal",
     gate_debug=False,
 ):
     if primary_model is None:
@@ -220,6 +255,7 @@ def run_primary_plus_meta(
         use_illiquidity_gate=use_illiquidity_gate,
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+        weighting=weighting_scheme,
         debug=gate_debug,
         return_pf=True,
     )
@@ -443,8 +479,8 @@ def run_primary_plus_meta(
         dtype=bool,
     )
 
-    # --- 8) One simple position sizing rule ---
-    # signed conviction in [-1, 1] times probability of profit:
+    # --- 8) Position sizing ---
+    # Base score is signed conviction in [-1, 1] times probability of profit.
     signed = (p_primary_live * 2.0 - 1.0)   # long if >0, short if <0
     size = signed * p_meta_live            # scale by meta prob
 
@@ -460,6 +496,7 @@ def run_primary_plus_meta(
         allowed = int(out['is_tradable'].sum())
         print(f"[run_primary_plus_meta gate debug] allowed={allowed} blocked={blocked}")
     out = out.loc[out['is_tradable']].copy()
+    out['weight'] = size_from_run_primary_out(out, weighting_scheme=weighting_scheme)
 
     return out, {
         'p_oof': p_oof,
