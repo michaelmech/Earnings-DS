@@ -343,6 +343,7 @@ def run_primary_plus_meta(
         anchor=anchors if anchors is not None else ["SPY"],
         min_hist_days=200,
     )
+    test_ds = test_ds.drop_duplicates(subset=['ticker'], keep='last').copy()
 
     # Align columns
     X_live = test_ds[X.columns].copy()
@@ -369,12 +370,17 @@ def run_primary_plus_meta(
             earnings_ts=lambda df: pd.to_datetime(df['earnings_ts']),
             event_day=lambda df: pd.to_datetime(df['event_day']),
         )
+        # Defensive: synthetic builders can occasionally emit duplicate event keys.
+        # keep one row per (ticker, earnings_ts) so downstream MultiIndex lookups are scalar.
+        .drop_duplicates(subset=['ticker', 'earnings_ts'], keep='last')
         .set_index(['ticker', 'earnings_ts'])[['event_day']]
         .sort_index()
     )
 
+    # Map per-ticker live probabilities to event-indexed series.
+    p_by_ticker = p_primary_live[~p_primary_live.index.duplicated(keep='last')]
     p_primary_live_event = pd.Series(
-        p_primary_live.reindex(idx_live.index.get_level_values('ticker')).to_numpy(),
+        p_by_ticker.reindex(idx_live.index.get_level_values('ticker')).to_numpy(),
         index=idx_live.index,
     )
 
