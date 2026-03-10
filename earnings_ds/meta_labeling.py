@@ -362,6 +362,78 @@ def run_primary_plus_meta(
         index=test_ds['ticker'].values
     )
 
+    # --- 7b) Apply live-time event gating (same path used by simulations) ---
+    idx_live = (
+        test_ds[['ticker', 'earnings_ts', 'event_day']]
+        .assign(
+            earnings_ts=lambda df: pd.to_datetime(df['earnings_ts']),
+            event_day=lambda df: pd.to_datetime(df['event_day']),
+        )
+        .set_index(['ticker', 'earnings_ts'])[['event_day']]
+        .sort_index()
+    )
+
+    p_primary_live_event = pd.Series(
+        p_primary_live.reindex(idx_live.index.get_level_values('ticker')).to_numpy(),
+        index=idx_live.index,
+    )
+
+    spread_df = None
+    illiquidity_threshold_by_event = None
+    if use_illiquidity_gate:
+        spread_df = illiquidity_spread_df
+        if spread_df is None:
+            from .simulations import calculate_agk_spread_proxy
+
+            spread_df = calculate_agk_spread_proxy(
+                open_df=px_open,
+                high_df=px_high,
+                low_df=px_low,
+                close_df=px_close,
+                **(illiquidity_spread_kwargs or {}),
+            )
+        spread_df = spread_df.reindex_like(px_close)
+        tp_threshold_df = (float(tp) * px_close).abs()
+        illiquidity_threshold_by_event = (
+            tp_threshold_df.stack()
+            .rename_axis(['event_day', 'ticker'])
+            .rename('spread_cap')
+            .reorder_levels(['ticker', 'event_day'])
+        )
+
+    from .simulations import make_event_signal_matrices
+
+    _, el_live, _, es_live, _ = make_event_signal_matrices(
+        index_df=idx_live,
+        px_close=px_close,
+        p_primary=p_primary_live_event,
+        horizon=horizon,
+        side_threshold=side_threshold,
+        illiquidity_spread_df=spread_df,
+        illiquidity_threshold_by_event=illiquidity_threshold_by_event,
+    )
+
+    if long_only:
+        es_live[:] = False
+
+    live_entries = (el_live | es_live)
+    live_entry_keys = (
+        live_entries.stack()
+        .loc[lambda s: s]
+        .index.set_names(['event_day', 'ticker'])
+        .reorder_levels(['ticker', 'event_day'])
+    )
+    live_entry_key_set = set(live_entry_keys.to_list())
+
+    tradable_mask = pd.Series(
+        [
+            (tkr, pd.to_datetime(ev_day).normalize()) in live_entry_key_set
+            for tkr, ev_day in zip(test_ds['ticker'].values, test_ds['event_day'].values)
+        ],
+        index=test_ds['ticker'].values,
+        dtype=bool,
+    )
+
     # --- 8) One simple position sizing rule ---
     # signed conviction in [-1, 1] times probability of profit:
     signed = (p_primary_live * 2.0 - 1.0)   # long if >0, short if <0
@@ -372,6 +444,9 @@ def run_primary_plus_meta(
         'p_meta': p_meta_live,
         'size': size
     }).sort_values('size', ascending=False)
+
+    out['is_tradable'] = tradable_mask.reindex(out.index).fillna(False)
+    out = out.loc[out['is_tradable']].copy()
 
     return out, {
         'p_oof': p_oof,
