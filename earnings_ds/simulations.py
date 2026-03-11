@@ -3,6 +3,43 @@ import pandas as pd
 import vectorbt as vbt
 
 
+def build_size_fractions(
+    entries_long: pd.DataFrame,
+    entries_short: pd.DataFrame,
+    *,
+    weighting: str = "equal",
+    long_scores: pd.DataFrame | None = None,
+    short_scores: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Build per-row position fractions for vectorbt percent sizing.
+
+    Parameters
+    ----------
+    entries_long, entries_short
+        Boolean entry matrices.
+    weighting
+        ``"equal"`` or ``"proba"``.
+    long_scores, short_scores
+        Optional score matrices used when ``weighting='proba'``.
+    """
+    if weighting not in ("equal", "proba"):
+        raise ValueError("weighting must be 'equal' or 'proba'")
+
+    if weighting == "equal":
+        w_long = entries_long.astype(float)
+        w_short = entries_short.astype(float)
+    else:
+        if long_scores is None or short_scores is None:
+            raise ValueError("long_scores and short_scores are required when weighting='proba'")
+        w_long = long_scores.where(entries_long)
+        w_short = short_scores.where(entries_short)
+
+    w_raw = (w_long.fillna(0.0) + w_short.fillna(0.0)).where((entries_long | entries_short), 0.0)
+    w_sum = w_raw.sum(axis=1).replace(0.0, np.nan)
+    size_frac = w_raw.div(w_sum, axis=0).fillna(0.0)
+    return size_frac.where((entries_long | entries_short), 0.0)
+
+
 def calculate_smart_slippage(
     open_df: pd.DataFrame,
     high_df: pd.DataFrame,
@@ -307,17 +344,13 @@ def simulate_earnings_bidir_vbt(
                 _dbg(f"  example: {side} {close.columns[c]} on {close.index[r]} close=NaN", debug)
 
     # --- sizing (gross across both sides per day) ---
-    if weighting == "equal":
-        w_long = long_entries.astype(float)
-        w_short = short_entries.astype(float)
-    else:
-        w_long = long_cand.where(long_entries)
-        w_short = (1.0 - short_cand).where(short_entries)
-
-    w_raw = (w_long.fillna(0.0) + w_short.fillna(0.0)).where((long_entries | short_entries), 0.0)
-    w_sum = w_raw.sum(axis=1).replace(0.0, np.nan)
-    size_frac = w_raw.div(w_sum, axis=0).fillna(0.0)
-    size_frac = size_frac.where((long_entries | short_entries), 0.0)
+    size_frac = build_size_fractions(
+        entries_long=long_entries,
+        entries_short=short_entries,
+        weighting=weighting,
+        long_scores=long_cand,
+        short_scores=(1.0 - short_cand),
+    )
 
     _dbg("==== DEBUG: sizing ====", debug)
     _row_sum_report(size_frac, "size_frac", debug)
@@ -534,14 +567,13 @@ def simulate_earnings_long_vbt(
     if weighting not in ("equal", "proba"):
         raise ValueError("weighting must be 'equal' or 'proba'")
 
-    if weighting == "equal":
-        w_raw = entries.astype(float)
-    else:
-        w_raw = candidates.where(entries)
-
-    w_sum = w_raw.sum(axis=1).replace(0.0, np.nan)
-    size_frac = w_raw.div(w_sum, axis=0).fillna(0.0)
-    size_frac = size_frac.where(entries, 0.0)
+    size_frac = build_size_fractions(
+        entries_long=entries,
+        entries_short=pd.DataFrame(False, index=entries.index, columns=entries.columns),
+        weighting=weighting,
+        long_scores=candidates,
+        short_scores=pd.DataFrame(0.0, index=entries.index, columns=entries.columns),
+    )
 
     _dbg("==== DEBUG: sizing ====", debug)
     _row_sum_report(size_frac, "size_frac", debug)
@@ -943,6 +975,7 @@ def simulate_event_returns_from_proba(
     illiquidity_spread_df: pd.DataFrame | None = None,
     illiquidity_spread_fn=calculate_agk_spread_proxy,
     illiquidity_spread_kwargs: dict | None = None,
+    weighting: str = "equal",
     debug: bool = False,
     return_pf: bool = False,
 ):
@@ -1015,6 +1048,7 @@ def simulate_event_returns_from_proba(
         volume_df=px_volume,
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
+        weighting=weighting,
         debug=debug,
         return_pf=return_pf,
     )
@@ -1067,6 +1101,7 @@ def vectorbt_trade_returns_gapaware(
     stop_exits_on_open_only: bool = True,
     use_smart_slippage: bool = True,
     smart_slippage_kwargs: dict | None = None,
+    weighting: str = "equal",
     debug=False,
     debug_show_examples=5,
     return_pf: bool = False,
@@ -1082,13 +1117,13 @@ def vectorbt_trade_returns_gapaware(
     # Match sizing semantics used in other simulation functions:
     # - normalize same-day candidate weights to sum to 1.0
     # - pass percent sizes with shared cash pool across columns
-    w_raw = (entries_long.astype(float) + entries_short.astype(float)).where(
-        (entries_long | entries_short),
-        0.0,
+    size_frac = build_size_fractions(
+        entries_long=entries_long,
+        entries_short=entries_short,
+        weighting=weighting,
+        long_scores=entries_long.astype(float),
+        short_scores=entries_short.astype(float),
     )
-    w_sum = w_raw.sum(axis=1).replace(0.0, np.nan)
-    size_frac = w_raw.div(w_sum, axis=0).fillna(0.0)
-    size_frac = size_frac.where((entries_long | entries_short), 0.0)
 
     slippage_value: float | pd.DataFrame
     if use_smart_slippage and volume_df is not None:

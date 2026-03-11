@@ -273,6 +273,7 @@ def meta_cvs(
     use_illiquidity_gate=False,
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
+    weighting_scheme="equal",
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -295,6 +296,7 @@ def meta_cvs(
     primary_score = _aggregate_cv_scores(primary_scores, use_last_fold=primary_use_last_fold)
     summary_name = 'last fold' if primary_use_last_fold else 'mean'
     print(f'Primary CV {summary_name} average_precision:', primary_score)
+    _print_score_distribution('Primary CV average_precision', primary_scores)
 
   X=X.replace({np.inf: np.nan,-np.inf: np.nan})
 
@@ -313,6 +315,7 @@ def meta_cvs(
           use_illiquidity_gate=use_illiquidity_gate,
           illiquidity_spread_df=illiquidity_spread_df,
           illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+          weighting_scheme=weighting_scheme,
       )
 
   print(X_meta.shape,y_meta.shape,close.shape)
@@ -415,6 +418,27 @@ def _cv_average_precision_skill(model, X, y, cv, min_fold_pos_rate=0.05, return_
   return float(np.mean(scores))
 
 
+
+
+def _print_score_distribution(label, scores):
+  scores = np.asarray(scores, dtype=float)
+  if scores.size == 0:
+    print(f"{label} distribution: no scores")
+    return
+
+  summary = {
+      'n': int(scores.size),
+      'mean': float(np.mean(scores)),
+      'std': float(np.std(scores)),
+      'min': float(np.min(scores)),
+      'p25': float(np.percentile(scores, 25)),
+      'p50': float(np.percentile(scores, 50)),
+      'p75': float(np.percentile(scores, 75)),
+      'max': float(np.max(scores)),
+  }
+  print(f"{label} distribution: {summary}")
+  print(f"{label} fold scores: {scores.tolist()}")
+
 def _aggregate_cv_scores(scores, use_last_fold=False):
   scores = np.asarray(scores, dtype=float)
 
@@ -453,6 +477,9 @@ def meta_cvs_composite(
     use_illiquidity_gate=False,
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
+    weighting_scheme="equal",
+    recall_weight=0.5,
+    ap_weight=None,
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -463,6 +490,19 @@ def meta_cvs_composite(
     meta_model = make_pipeline(SimpleImputer(fill_value=-999), LogisticRegression())
 
   X = X.replace({np.inf: np.nan, -np.inf: np.nan})
+
+  recall_weight = float(recall_weight)
+  if ap_weight is None:
+    ap_weight = 1.0 - recall_weight
+  else:
+    ap_weight = float(ap_weight)
+
+  if not (0.0 <= recall_weight <= 1.0):
+    raise ValueError('recall_weight must be in [0, 1]')
+  if not (0.0 <= ap_weight <= 1.0):
+    raise ValueError('ap_weight must be in [0, 1]')
+  if not np.isclose(recall_weight + ap_weight, 1.0):
+    raise ValueError('recall_weight + ap_weight must equal 1.0')
 
   primary_cv = PurgedTimeSeriesSplit(
       dates=pd.Series(X.index.get_level_values('earnings_ts')),
@@ -491,6 +531,8 @@ def meta_cvs_composite(
     )
 
   primary_score = _aggregate_cv_scores(primary_scores, use_last_fold=primary_use_last_fold)
+  if adjust_for_imbalance:
+    _print_score_distribution('Primary recall skill (adjusted) CV', primary_scores)
 
   merged_smart_slippage_kwargs = dict(smart_slippage_kwargs or {})
   if min_slippage is not None:
@@ -517,6 +559,7 @@ def meta_cvs_composite(
       use_illiquidity_gate=use_illiquidity_gate,
       illiquidity_spread_df=illiquidity_spread_df,
       illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+      weighting_scheme=weighting_scheme,
   )
 
   X_meta = X_meta.replace({np.inf: np.nan, -np.inf: np.nan})
@@ -547,7 +590,10 @@ def meta_cvs_composite(
     )
 
   meta_score = _aggregate_cv_scores(meta_scores, use_last_fold=meta_use_last_fold)
-  composite_score = (primary_score + meta_score) / 2
+  if adjust_for_imbalance:
+    _print_score_distribution('Meta AP skill (adjusted) CV', meta_scores)
+
+  composite_score = (recall_weight * primary_score) + (ap_weight * meta_score)
 
   if return_component_scores:
     return {
@@ -556,6 +602,8 @@ def meta_cvs_composite(
         'meta_score': meta_score,
         'primary_fold_scores': np.asarray(primary_scores, dtype=float),
         'meta_fold_scores': np.asarray(meta_scores, dtype=float),
+        'recall_weight': recall_weight,
+        'ap_weight': ap_weight,
     }
 
   return composite_score
