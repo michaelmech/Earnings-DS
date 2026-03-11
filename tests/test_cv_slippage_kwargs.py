@@ -274,3 +274,30 @@ def test_meta_cvs_composite_prints_adjusted_distributions(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Primary recall skill (adjusted) CV distribution:" in out
     assert "Meta AP skill (adjusted) CV distribution:" in out
+
+
+def test_meta_cvs_composite_prints_unadjusted_recall_distribution(monkeypatch, capsys):
+    X, y, ds, px, tickers = _toy_inputs()
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+    monkeypatch.setattr(cv, "cross_val_score", lambda *args, **kwargs: np.array([0.4, 0.5]))
+    monkeypatch.setattr(cv, "cvs", lambda *args, **kwargs: np.array([0.7, 0.8]))
+
+    cv.meta_cvs_composite(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        adjust_for_imbalance=False,
+    )
+
+    out = capsys.readouterr().out
+    assert "Primary recall CV distribution:" in out
+    assert "Primary recall CV fold scores:" in out

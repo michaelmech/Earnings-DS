@@ -533,6 +533,8 @@ def meta_cvs_composite(
   primary_score = _aggregate_cv_scores(primary_scores, use_last_fold=primary_use_last_fold)
   if adjust_for_imbalance:
     _print_score_distribution('Primary recall skill (adjusted) CV', primary_scores)
+  else:
+    _print_score_distribution('Primary recall CV', primary_scores)
 
   merged_smart_slippage_kwargs = dict(smart_slippage_kwargs or {})
   if min_slippage is not None:
