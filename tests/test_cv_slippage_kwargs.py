@@ -189,3 +189,88 @@ def test_meta_cvs_composite_passes_illiquidity_gate_kwargs(monkeypatch):
     assert seen["use_illiquidity_gate"] is True
     assert seen["illiquidity_spread_df"] is spread_df
     assert seen["illiquidity_spread_kwargs"] == {"window": 10}
+
+
+def test_meta_cvs_primary_prints_distribution(monkeypatch, capsys):
+    X, y, ds, px, tickers = _toy_inputs()
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+
+    def fake_cvs(*args, **kwargs):
+        label = kwargs.get("label")
+        if label == "Primary CV":
+            return np.array([0.2, 0.4, 0.6])
+        return np.array([0.5, 0.6])
+
+    monkeypatch.setattr(cv, "cvs", fake_cvs)
+
+    cv.meta_cvs(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        primary_cvs=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "Primary CV average_precision distribution:" in out
+    assert "Primary CV average_precision fold scores:" in out
+
+
+def test_meta_cvs_composite_uses_weighted_average(monkeypatch):
+    X, y, ds, px, tickers = _toy_inputs()
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+    monkeypatch.setattr(cv, "_cv_recall_skill", lambda *args, **kwargs: np.array([0.6]))
+    monkeypatch.setattr(cv, "_cv_average_precision_skill", lambda *args, **kwargs: np.array([0.8]))
+
+    out = cv.meta_cvs_composite(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        recall_weight=0.25,
+    )
+
+    assert out == 0.25 * 0.6 + 0.75 * 0.8
+
+
+def test_meta_cvs_composite_prints_adjusted_distributions(monkeypatch, capsys):
+    X, y, ds, px, tickers = _toy_inputs()
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+    monkeypatch.setattr(cv, "_cv_recall_skill", lambda *args, **kwargs: np.array([0.5, 0.6]))
+    monkeypatch.setattr(cv, "_cv_average_precision_skill", lambda *args, **kwargs: np.array([0.7, 0.8]))
+
+    cv.meta_cvs_composite(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        adjust_for_imbalance=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "Primary recall skill (adjusted) CV distribution:" in out
+    assert "Meta AP skill (adjusted) CV distribution:" in out
