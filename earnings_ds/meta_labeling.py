@@ -21,9 +21,18 @@ def size_from_run_primary_out(
     score_col: str = "size",
     max_gross: float = 1.0,
 ) -> pd.Series:
-    """Convert `run_primary_plus_meta` output into portfolio weights."""
-    if weighting_scheme not in ("equal", "score"):
-        raise ValueError("weighting_scheme must be 'equal' or 'score'")
+    """Convert `run_primary_plus_meta` output into portfolio weights.
+
+    weighting_scheme:
+      - ``equal``: equal gross-weight allocation per tradable name
+      - ``proba``: proportional weighting by ``score_col`` magnitude
+      - ``score``: backward-compatible alias of ``proba``
+    """
+    if weighting_scheme == "score":
+        weighting_scheme = "proba"
+
+    if weighting_scheme not in ("equal", "proba"):
+        raise ValueError("weighting_scheme must be 'equal', 'proba', or 'score'")
 
     if score_col not in out.columns:
         raise ValueError(f"score_col '{score_col}' not found in out")
