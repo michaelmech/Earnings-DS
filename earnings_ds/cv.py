@@ -273,6 +273,7 @@ def meta_cvs(
     use_illiquidity_gate=False,
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
+    weighting_scheme="equal",
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -313,6 +314,7 @@ def meta_cvs(
           use_illiquidity_gate=use_illiquidity_gate,
           illiquidity_spread_df=illiquidity_spread_df,
           illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+          weighting_scheme=weighting_scheme,
       )
 
   print(X_meta.shape,y_meta.shape,close.shape)
@@ -453,6 +455,7 @@ def meta_cvs_composite(
     use_illiquidity_gate=False,
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
+    weighting_scheme="equal",
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -517,6 +520,7 @@ def meta_cvs_composite(
       use_illiquidity_gate=use_illiquidity_gate,
       illiquidity_spread_df=illiquidity_spread_df,
       illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+      weighting_scheme=weighting_scheme,
   )
 
   X_meta = X_meta.replace({np.inf: np.nan, -np.inf: np.nan})
