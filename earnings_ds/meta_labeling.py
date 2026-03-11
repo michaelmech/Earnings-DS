@@ -534,6 +534,7 @@ def derive_meta_test_predictions(
     use_illiquidity_gate=False,
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
+    weighting_scheme="equal",
     gate_debug=False,
 ):
     """Train primary+meta on train split and score a fixed test split.
@@ -617,6 +618,7 @@ def derive_meta_test_predictions(
         use_illiquidity_gate=use_illiquidity_gate,
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+        weighting=weighting_scheme,
         debug=gate_debug,
         return_pf=True,
     )
@@ -679,6 +681,7 @@ def derive_meta_test_predictions(
         use_illiquidity_gate=use_illiquidity_gate,
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+        weighting=weighting_scheme,
         debug=gate_debug,
         return_pf=True,
     )
@@ -713,6 +716,7 @@ def derive_meta_test_predictions(
         use_illiquidity_gate=use_illiquidity_gate,
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
+        weighting=weighting_scheme,
         debug=gate_debug,
         return_pf=True,
     )
