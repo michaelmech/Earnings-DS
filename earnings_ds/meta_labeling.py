@@ -510,8 +510,17 @@ def run_primary_plus_meta(
 
     out['is_tradable'] = tradable_mask.reindex(out.index).fillna(False)
     if gate_debug:
+        blocked_primary = int((out['p_primary'] < float(primary_threshold)).sum())
+        blocked_meta = int((out['p_meta'] < float(meta_threshold)).sum())
         blocked = int((~out['is_tradable']).sum())
         allowed = int(out['is_tradable'].sum())
+        non_zero_size = int((out['size'] != 0.0).sum())
+        print(
+            "[run_primary_plus_meta threshold debug] "
+            f"p_primary_below={blocked_primary} "
+            f"p_meta_below={blocked_meta} "
+            f"non_zero_size={non_zero_size}"
+        )
         print(f"[run_primary_plus_meta gate debug] allowed={allowed} blocked={blocked}")
     out = out.loc[out['is_tradable']].copy()
     out['weight'] = size_from_run_primary_out(out, weighting_scheme=weighting_scheme, max_gross=max_trade_size)
