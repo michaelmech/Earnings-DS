@@ -10,6 +10,7 @@ def build_size_fractions(
     weighting: str = "equal",
     long_scores: pd.DataFrame | None = None,
     short_scores: pd.DataFrame | None = None,
+    max_trade_size: float = 1.0,
 ) -> pd.DataFrame:
     """Build per-row position fractions for vectorbt percent sizing.
 
@@ -24,6 +25,8 @@ def build_size_fractions(
     """
     if weighting not in ("equal", "proba"):
         raise ValueError("weighting must be 'equal' or 'proba'")
+    if not (0.0 < float(max_trade_size) <= 1.0):
+        raise ValueError("max_trade_size must be in (0, 1]")
 
     if weighting == "equal":
         w_long = entries_long.astype(float)
@@ -37,6 +40,7 @@ def build_size_fractions(
     w_raw = (w_long.fillna(0.0) + w_short.fillna(0.0)).where((entries_long | entries_short), 0.0)
     w_sum = w_raw.sum(axis=1).replace(0.0, np.nan)
     size_frac = w_raw.div(w_sum, axis=0).fillna(0.0)
+    size_frac = size_frac.clip(upper=float(max_trade_size))
     return size_frac.where((entries_long | entries_short), 0.0)
 
 
@@ -227,6 +231,7 @@ def simulate_earnings_bidir_vbt(
     max_proba_short: float | None = None,
     top_n_short: int | None = None,
     weighting: str = "proba",  # "proba" or "equal"
+    max_trade_size: float = 1.0,
     fees: float = 0.0,
     slippage: float = 0.0,
     freq: str = "1D",
@@ -350,6 +355,7 @@ def simulate_earnings_bidir_vbt(
         weighting=weighting,
         long_scores=long_cand,
         short_scores=(1.0 - short_cand),
+        max_trade_size=max_trade_size,
     )
 
     _dbg("==== DEBUG: sizing ====", debug)
@@ -453,6 +459,7 @@ def simulate_earnings_long_vbt(
     min_proba: float | None = None,
     top_n: int | None = None,
     weighting: str = "proba",  # "proba" or "equal"
+    max_trade_size: float = 1.0,
     fees: float = 0.0,
     slippage: float = 0.0,
     freq: str = "1D",
@@ -573,6 +580,7 @@ def simulate_earnings_long_vbt(
         weighting=weighting,
         long_scores=candidates,
         short_scores=pd.DataFrame(0.0, index=entries.index, columns=entries.columns),
+        max_trade_size=max_trade_size,
     )
 
     _dbg("==== DEBUG: sizing ====", debug)
@@ -976,6 +984,7 @@ def simulate_event_returns_from_proba(
     illiquidity_spread_fn=calculate_agk_spread_proxy,
     illiquidity_spread_kwargs: dict | None = None,
     weighting: str = "equal",
+    max_trade_size: float = 1.0,
     debug: bool = False,
     return_pf: bool = False,
 ):
@@ -1049,6 +1058,7 @@ def simulate_event_returns_from_proba(
         use_smart_slippage=use_smart_slippage,
         smart_slippage_kwargs=smart_slippage_kwargs,
         weighting=weighting,
+        max_trade_size=max_trade_size,
         debug=debug,
         return_pf=return_pf,
     )
@@ -1102,6 +1112,7 @@ def vectorbt_trade_returns_gapaware(
     use_smart_slippage: bool = True,
     smart_slippage_kwargs: dict | None = None,
     weighting: str = "equal",
+    max_trade_size: float = 1.0,
     debug=False,
     debug_show_examples=5,
     return_pf: bool = False,
@@ -1123,6 +1134,7 @@ def vectorbt_trade_returns_gapaware(
         weighting=weighting,
         long_scores=entries_long.astype(float),
         short_scores=entries_short.astype(float),
+        max_trade_size=max_trade_size,
     )
 
     slippage_value: float | pd.DataFrame

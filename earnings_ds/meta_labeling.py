@@ -163,7 +163,9 @@ def run_primary_plus_meta(
     horizon=5,
     primary_model=None,
     meta_model=None,
-    side_threshold=0.5,
+    primary_threshold=0.5,
+    meta_threshold=0.5,
+    side_threshold=None,
     meta_min_abs_ret=0.0,
     gap=121,
     anchors=None,
@@ -178,12 +180,16 @@ def run_primary_plus_meta(
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
     weighting_scheme="equal",
+    max_trade_size: float = 1.0,
     gate_debug=False,
 ):
     if primary_model is None:
         primary_model = LGBMClassifier(verbose=-1)
     if meta_model is None:
         meta_model = make_pipeline(SimpleImputer(fill_value=-999),LogisticRegression())
+
+    if side_threshold is not None:
+        primary_threshold = float(side_threshold)
 
     X=X.replace({np.inf: np.nan,-np.inf: np.nan})
     X=X.copy().fillna(-999)
@@ -255,7 +261,7 @@ def run_primary_plus_meta(
         px_close=px_close,
         px_volume=px_volume,
         horizon=horizon,
-        side_threshold=side_threshold,
+        side_threshold=primary_threshold,
         tp=tp,
         sl=sl,
         long_only=long_only,
@@ -265,6 +271,7 @@ def run_primary_plus_meta(
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
         weighting=weighting_scheme,
+        max_trade_size=max_trade_size,
         debug=gate_debug,
         return_pf=True,
     )
@@ -351,7 +358,7 @@ def run_primary_plus_meta(
 
     print(y_ok.shape,'initial y')
 
-    long_only_mask = p_oof_ok >= side_threshold
+    long_only_mask = p_oof_ok >= primary_threshold
     trade_ret = trade_ret.loc[long_only_mask]
     X_meta_base = X_meta_base.loc[long_only_mask]
     p_oof_ok = p_oof_ok.loc[long_only_mask]
@@ -461,7 +468,7 @@ def run_primary_plus_meta(
         px_close=px_close,
         p_primary=p_primary_live_event,
         horizon=horizon,
-        side_threshold=side_threshold,
+        side_threshold=primary_threshold,
         illiquidity_spread_df=spread_df,
         illiquidity_threshold_by_event=illiquidity_threshold_by_event,
         debug=gate_debug,
@@ -492,6 +499,8 @@ def run_primary_plus_meta(
     # Base score is signed conviction in [-1, 1] times probability of profit.
     signed = (p_primary_live * 2.0 - 1.0)   # long if >0, short if <0
     size = signed * p_meta_live            # scale by meta prob
+    size = size.where(p_primary_live >= float(primary_threshold), 0.0)
+    size = size.where(p_meta_live >= float(meta_threshold), 0.0)
 
     out = pd.DataFrame({
         'p_primary': p_primary_live,
@@ -505,7 +514,7 @@ def run_primary_plus_meta(
         allowed = int(out['is_tradable'].sum())
         print(f"[run_primary_plus_meta gate debug] allowed={allowed} blocked={blocked}")
     out = out.loc[out['is_tradable']].copy()
-    out['weight'] = size_from_run_primary_out(out, weighting_scheme=weighting_scheme)
+    out['weight'] = size_from_run_primary_out(out, weighting_scheme=weighting_scheme, max_gross=max_trade_size)
 
     return out, {
         'p_oof': p_oof,
@@ -530,8 +539,9 @@ def derive_meta_test_predictions(
     horizon=5,
     primary_model=None,
     meta_model=None,
-    side_threshold=0.5,
+    primary_threshold=0.5,
     meta_threshold=0.5,
+    side_threshold=None,
     meta_min_abs_ret=0.0,
     gap=121,
     sl=0.032,
@@ -544,6 +554,7 @@ def derive_meta_test_predictions(
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
     weighting_scheme="equal",
+    max_trade_size: float = 1.0,
     gate_debug=False,
 ):
     """Train primary+meta on train split and score a fixed test split.
@@ -555,6 +566,9 @@ def derive_meta_test_predictions(
         primary_model = LGBMClassifier(verbose=-1)
     if meta_model is None:
         meta_model = make_pipeline(SimpleImputer(fill_value=-999), LogisticRegression())
+
+    if side_threshold is not None:
+        primary_threshold = float(side_threshold)
 
     X_train = X_train.replace({np.inf: np.nan, -np.inf: np.nan}).copy().fillna(-999)
     X_test = X_test.replace({np.inf: np.nan, -np.inf: np.nan}).copy().fillna(-999)
@@ -618,7 +632,7 @@ def derive_meta_test_predictions(
         px_close=px_close_train,
         px_volume=px_volume_train,
         horizon=horizon,
-        side_threshold=side_threshold,
+        side_threshold=primary_threshold,
         tp=tp,
         sl=sl,
         long_only=long_only,
@@ -628,6 +642,7 @@ def derive_meta_test_predictions(
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
         weighting=weighting_scheme,
+        max_trade_size=max_trade_size,
         debug=gate_debug,
         return_pf=True,
     )
@@ -640,7 +655,7 @@ def derive_meta_test_predictions(
     trade_ret_train = trade_ret_train.loc[common_idx]
 
     if long_only:
-        long_mask = p_oof_ok >= side_threshold
+        long_mask = p_oof_ok >= primary_threshold
         X_meta_base = X_meta_base.loc[long_mask]
         p_oof_ok = p_oof_ok.loc[long_mask]
         trade_ret_train = trade_ret_train.loc[long_mask]
@@ -681,7 +696,7 @@ def derive_meta_test_predictions(
         px_close=px_close_test,
         px_volume=px_volume_test,
         horizon=horizon,
-        side_threshold=side_threshold,
+        side_threshold=primary_threshold,
         tp=tp,
         sl=sl,
         long_only=long_only,
@@ -691,6 +706,7 @@ def derive_meta_test_predictions(
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
         weighting=weighting_scheme,
+        max_trade_size=max_trade_size,
         debug=gate_debug,
         return_pf=True,
     )
@@ -700,10 +716,10 @@ def derive_meta_test_predictions(
     signed = (events_test['p_primary'] * 2.0 - 1.0)
     if long_only:
         signed = signed.clip(lower=0.0)
-    events_test['size'] = signed * events_test['p_meta']
+    events_test['size'] = (signed * events_test['p_meta']).clip(upper=float(max_trade_size))
     events_test['weighted_trade_ret'] = events_test['trade_ret'] * events_test['size']
 
-    take_mask = p_meta_test >= meta_threshold
+    take_mask = (p_meta_test >= meta_threshold) & (p_primary_test >= primary_threshold)
     gated_idx = idx_test.loc[take_mask.reindex(idx_test.index).fillna(False)]
     gated_p_primary = p_primary_test.loc[gated_idx.index]
 
@@ -716,7 +732,7 @@ def derive_meta_test_predictions(
         px_close=px_close_test,
         px_volume=px_volume_test,
         horizon=horizon,
-        side_threshold=side_threshold,
+        side_threshold=primary_threshold,
         tp=tp,
         sl=sl,
         long_only=long_only,
@@ -726,6 +742,7 @@ def derive_meta_test_predictions(
         illiquidity_spread_df=illiquidity_spread_df,
         illiquidity_spread_kwargs=illiquidity_spread_kwargs,
         weighting=weighting_scheme,
+        max_trade_size=max_trade_size,
         debug=gate_debug,
         return_pf=True,
     )
@@ -734,13 +751,13 @@ def derive_meta_test_predictions(
     signed_gated = (events_test_meta_gated['p_primary'] * 2.0 - 1.0)
     if long_only:
         signed_gated = signed_gated.clip(lower=0.0)
-    events_test_meta_gated['size'] = signed_gated * events_test_meta_gated['p_meta']
+    events_test_meta_gated['size'] = (signed_gated * events_test_meta_gated['p_meta']).clip(upper=float(max_trade_size))
     events_test_meta_gated['weighted_trade_ret'] = (
         events_test_meta_gated['trade_ret'] * events_test_meta_gated['size']
     )
 
     test_scores = pd.DataFrame({'p_primary': p_primary_test, 'p_meta': p_meta_test})
-    test_scores['size'] = (test_scores['p_primary'] * 2.0 - 1.0) * test_scores['p_meta']
+    test_scores['size'] = ((test_scores['p_primary'] * 2.0 - 1.0) * test_scores['p_meta']).clip(upper=float(max_trade_size))
     if long_only:
         test_scores['size'] = test_scores['size'].clip(lower=0.0)
 

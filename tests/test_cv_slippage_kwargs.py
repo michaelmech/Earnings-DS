@@ -157,6 +157,38 @@ def test_meta_cvs_passes_illiquidity_gate_kwargs(monkeypatch):
     assert seen["illiquidity_spread_kwargs"] == {"window": 20}
 
 
+def test_meta_cvs_passes_threshold_and_trade_size(monkeypatch):
+    X, y, ds, px, tickers = _toy_inputs()
+    seen = {}
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        seen["primary_threshold"] = kwargs.get("primary_threshold")
+        seen["meta_threshold"] = kwargs.get("meta_threshold")
+        seen["max_trade_size"] = kwargs.get("max_trade_size")
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+    monkeypatch.setattr(cv, "cvs", lambda *args, **kwargs: np.array([0.5, 0.6]))
+
+    cv.meta_cvs(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        primary_threshold=0.61,
+        meta_threshold=0.72,
+        max_trade_size=0.33,
+    )
+
+    assert seen["primary_threshold"] == 0.61
+    assert seen["meta_threshold"] == 0.72
+    assert seen["max_trade_size"] == 0.33
+
+
 def test_meta_cvs_composite_passes_illiquidity_gate_kwargs(monkeypatch):
     X, y, ds, px, tickers = _toy_inputs()
     seen = {}
@@ -189,6 +221,59 @@ def test_meta_cvs_composite_passes_illiquidity_gate_kwargs(monkeypatch):
     assert seen["use_illiquidity_gate"] is True
     assert seen["illiquidity_spread_df"] is spread_df
     assert seen["illiquidity_spread_kwargs"] == {"window": 10}
+
+
+def test_meta_cvs_composite_recall_floor_penalizes_when_below(monkeypatch):
+    X, y, ds, px, tickers = _toy_inputs()
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+    monkeypatch.setattr(cv, "_cv_recall_skill", lambda *args, **kwargs: np.array([0.4]))
+    monkeypatch.setattr(cv, "_cv_average_precision_skill", lambda *args, **kwargs: np.array([0.9]))
+
+    out = cv.meta_cvs_composite(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        use_primary_recall_floor=True,
+        primary_recall_floor=0.5,
+    )
+
+    assert out == -0.1
+
+
+def test_meta_cvs_composite_recall_floor_keeps_weighted_score_when_met(monkeypatch):
+    X, y, ds, px, tickers = _toy_inputs()
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+    monkeypatch.setattr(cv, "_cv_recall_skill", lambda *args, **kwargs: np.array([0.6]))
+    monkeypatch.setattr(cv, "_cv_average_precision_skill", lambda *args, **kwargs: np.array([0.8]))
+
+    out = cv.meta_cvs_composite(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        use_primary_recall_floor=True,
+        primary_recall_floor=0.5,
+        recall_weight=0.25,
+    )
+
+    assert out == 0.25 * 0.6 + 0.75 * 0.8
 
 
 def test_meta_cvs_primary_prints_distribution(monkeypatch, capsys):

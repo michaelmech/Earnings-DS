@@ -274,6 +274,9 @@ def meta_cvs(
     illiquidity_spread_df=None,
     illiquidity_spread_kwargs=None,
     weighting_scheme="equal",
+    primary_threshold=0.5,
+    meta_threshold=0.5,
+    max_trade_size: float = 1.0,
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -316,6 +319,9 @@ def meta_cvs(
           illiquidity_spread_df=illiquidity_spread_df,
           illiquidity_spread_kwargs=illiquidity_spread_kwargs,
           weighting_scheme=weighting_scheme,
+          primary_threshold=primary_threshold,
+          meta_threshold=meta_threshold,
+          max_trade_size=max_trade_size,
       )
 
   print(X_meta.shape,y_meta.shape,close.shape)
@@ -480,6 +486,11 @@ def meta_cvs_composite(
     weighting_scheme="equal",
     recall_weight=0.5,
     ap_weight=None,
+    primary_threshold=0.5,
+    meta_threshold=0.5,
+    max_trade_size: float = 1.0,
+    use_primary_recall_floor: bool = False,
+    primary_recall_floor: float = 0.0,
 ):
   from .meta_labeling import run_primary_plus_meta
 
@@ -503,6 +514,8 @@ def meta_cvs_composite(
     raise ValueError('ap_weight must be in [0, 1]')
   if not np.isclose(recall_weight + ap_weight, 1.0):
     raise ValueError('recall_weight + ap_weight must equal 1.0')
+  if not (0.0 <= float(primary_recall_floor) <= 1.0):
+    raise ValueError('primary_recall_floor must be in [0, 1]')
 
   primary_cv = PurgedTimeSeriesSplit(
       dates=pd.Series(X.index.get_level_values('earnings_ts')),
@@ -562,6 +575,9 @@ def meta_cvs_composite(
       illiquidity_spread_df=illiquidity_spread_df,
       illiquidity_spread_kwargs=illiquidity_spread_kwargs,
       weighting_scheme=weighting_scheme,
+      primary_threshold=primary_threshold,
+      meta_threshold=meta_threshold,
+      max_trade_size=max_trade_size,
   )
 
   X_meta = X_meta.replace({np.inf: np.nan, -np.inf: np.nan})
@@ -596,6 +612,12 @@ def meta_cvs_composite(
     _print_score_distribution('Meta AP skill (adjusted) CV', meta_scores)
 
   composite_score = (recall_weight * primary_score) + (ap_weight * meta_score)
+
+  if use_primary_recall_floor:
+    floor = float(primary_recall_floor)
+    if primary_score < floor:
+      shortfall = floor - primary_score
+      composite_score = -shortfall
 
   if return_component_scores:
     return {
