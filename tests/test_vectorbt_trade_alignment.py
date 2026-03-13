@@ -221,3 +221,49 @@ def test_illiquidity_gate_blocks_events_above_tp_price_cap():
     # AAA is blocked by illiquidity gate; BBB remains tradable.
     assert pd.isna(events_with_ret.loc[("AAA", pd.Timestamp("2024-04-02 16:00")), "trade_ret"])
     assert pd.notna(events_with_ret.loc[("BBB", pd.Timestamp("2024-04-03 16:00")), "trade_ret"])
+
+
+def test_illiquidity_gate_allows_when_volatility_exceeds_spread():
+    dates = pd.bdate_range("2024-04-01", periods=8)
+    tickers = ["AAA"]
+
+    close = pd.DataFrame(index=dates, columns=tickers, dtype=float)
+    close["AAA"] = [100.0, 120.0, 80.0, 130.0, 100.0, 101.0, 100.5, 100.0]
+    open_ = close.copy()
+    high = close.copy()
+    low = close.copy()
+
+    idx = pd.MultiIndex.from_tuples(
+        [("AAA", pd.Timestamp("2024-04-05 16:00"))],
+        names=["ticker", "earnings_ts"],
+    )
+    p_primary = pd.Series([0.8], index=idx)
+    index_df = pd.DataFrame(
+        {"event_day": [pd.Timestamp("2024-04-05")]},
+        index=idx,
+    )
+
+    spread_df = pd.DataFrame(0.5, index=dates, columns=tickers)
+    spread_df.loc[pd.Timestamp("2024-04-05"), "AAA"] = 5.0  # fails regular cap at tp=3%
+
+    events_with_ret, *_ = simulate_event_returns_from_proba(
+        index_df=index_df,
+        p_primary=p_primary,
+        px_open=open_,
+        px_high=high,
+        px_low=low,
+        px_close=close,
+        px_volume=None,
+        horizon=2,
+        side_threshold=0.5,
+        tp=0.03,
+        sl=0.03,
+        long_only=True,
+        use_smart_slippage=False,
+        use_illiquidity_gate=True,
+        illiquidity_spread_df=spread_df,
+    )
+
+    # Regular spread-cap gate fails, but trailing realized vol in dollars is larger
+    # than spread and should allow this event through the override branch.
+    assert pd.notna(events_with_ret.loc[("AAA", pd.Timestamp("2024-04-05 16:00")), "trade_ret"])

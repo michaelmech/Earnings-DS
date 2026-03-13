@@ -97,6 +97,27 @@ def calculate_agk_spread_proxy(
     spread_dollars = (hl_rel * close_df).abs()
     return spread_dollars.clip(lower=float(min_spread), upper=float(max_spread)).fillna(0.0)
 
+
+def calculate_past_realized_vol_dollars(
+    close_df: pd.DataFrame,
+    *,
+    horizon: int,
+) -> pd.DataFrame:
+    """Estimate trailing realized volatility in price units.
+
+    For each date ``t``, computes the standard deviation of close-to-close
+    returns over the most recent ``horizon + 1`` bars up to and including ``t``
+    (i.e., no forward-looking data), then converts to dollar units using
+    ``close_df[t]``.
+    """
+    if int(horizon) < 0:
+        raise ValueError("horizon must be >= 0")
+
+    trailing_ret = close_df.pct_change()
+    window = int(horizon) + 1
+    trailing_vol_rel = trailing_ret.rolling(window=window, min_periods=window).std()
+    return (trailing_vol_rel * close_df).abs()
+
 def _dbg(msg: str, enabled: bool) -> None:
     if enabled:
         print(msg)
@@ -738,6 +759,7 @@ def make_event_signal_matrices(
     map_to_next_trading_day=False,
     illiquidity_spread_df: pd.DataFrame | None = None,
     illiquidity_threshold_by_event: pd.Series | None = None,
+    realized_vol_dollars_df: pd.DataFrame | None = None,
     sample_n=10,
 ):
     """
@@ -896,6 +918,7 @@ def make_event_signal_matrices(
     long_mask = tmp['p_primary'] >= side_threshold
 
     blocked_by_illiquidity = 0
+    allowed_by_vol_override = 0
     skipped_missing_ticker = 0
 
     for (tkr, ets), row in tmp.iterrows():
@@ -907,9 +930,23 @@ def make_event_signal_matrices(
         if illiquidity_spread_df is not None and illiquidity_threshold_by_event is not None:
             est_spread = illiquidity_spread_df.at[d, tkr] if (d in illiquidity_spread_df.index and tkr in illiquidity_spread_df.columns) else np.nan
             spread_cap = illiquidity_threshold_by_event.loc[(tkr, ets)] if (tkr, ets) in illiquidity_threshold_by_event.index else np.nan
-            if pd.notna(est_spread) and pd.notna(spread_cap) and float(est_spread) > float(spread_cap):
+            realized_vol_dollars = np.nan
+            if realized_vol_dollars_df is not None and d in realized_vol_dollars_df.index and tkr in realized_vol_dollars_df.columns:
+                realized_vol_dollars = realized_vol_dollars_df.at[d, tkr]
+
+            regular_gate_pass = True
+            if pd.notna(est_spread) and pd.notna(spread_cap):
+                regular_gate_pass = float(est_spread) <= float(spread_cap)
+
+            vol_gate_pass = False
+            if pd.notna(est_spread) and pd.notna(realized_vol_dollars):
+                vol_gate_pass = float(realized_vol_dollars) > float(est_spread)
+
+            if not (regular_gate_pass or vol_gate_pass):
                 blocked_by_illiquidity += 1
                 continue
+            if (not regular_gate_pass) and vol_gate_pass:
+                allowed_by_vol_override += 1
 
         if long_mask.loc[(tkr, ets)]:
             entries_long.loc[d, tkr] = True
@@ -924,6 +961,8 @@ def make_event_signal_matrices(
             print(f"[gate debug] skipped_missing_ticker={skipped_missing_ticker}")
         if illiquidity_spread_df is not None and illiquidity_threshold_by_event is not None:
             print(f"[illiquidity gate] blocked events: {blocked_by_illiquidity}")
+            if realized_vol_dollars_df is not None:
+                print(f"[illiquidity gate] allowed by vol override: {allowed_by_vol_override}")
 
     exits_long  = entries_long.vbt.signals.fshift(horizon, fill_value=False)
     exits_short = entries_short.vbt.signals.fshift(horizon, fill_value=False)
@@ -1024,9 +1063,14 @@ def simulate_event_returns_from_proba(
             .rename("spread_cap")
             .reorder_levels(["ticker", "event_day"])
         )
+        realized_vol_dollars_df = calculate_past_realized_vol_dollars(
+            close_df=px_close,
+            horizon=horizon,
+        ).reindex_like(px_close)
     else:
         spread_df = None
         illiquidity_threshold_by_event = None
+        realized_vol_dollars_df = None
 
     tmp_events, el, xl, es, xs = make_event_signal_matrices(
         index_df=index_df,
@@ -1036,6 +1080,7 @@ def simulate_event_returns_from_proba(
         side_threshold=side_threshold,
         illiquidity_spread_df=spread_df,
         illiquidity_threshold_by_event=illiquidity_threshold_by_event,
+        realized_vol_dollars_df=realized_vol_dollars_df,
         debug=debug,
     )
 
