@@ -183,3 +183,58 @@ def test_derive_exit_labels_mandatory_vectorbt_respects_both_hit_rule_skip(monke
 
     assert np.isnan(out.loc[("AAA", pd.Timestamp("2024-01-03 16:00")), "exit_code"])
     assert np.isnan(out.loc[("AAA", pd.Timestamp("2024-01-03 16:00")), "exit_day"])
+
+
+def test_derive_exit_labels_mandatory_vectorbt_illiquidity_gate_allows_vol_override(monkeypatch):
+    dates = pd.bdate_range("2024-01-02", periods=8)
+    close = pd.DataFrame(
+        {
+            "AAA": [100.0, 140.0, 80.0, 120.0, 90.0, 100.0, 100.0, 100.0],
+            "BBB": [100.0] * 8,
+        },
+        index=dates,
+    )
+    open_ = close.copy()
+    high = close.copy()
+    low = close.copy()
+
+    idx = pd.MultiIndex.from_tuples(
+        [("AAA", pd.Timestamp("2024-01-03 16:00"))],
+        names=["ticker", "earnings_ts"],
+    )
+    X = pd.DataFrame(index=idx)
+
+    spread = pd.DataFrame(0.01, index=close.index, columns=close.columns)
+    spread.loc[pd.Timestamp("2024-01-03"), "AAA"] = 5.0
+
+    captured = {}
+
+    def _fake_vbt(*, entries_long, **kwargs):
+        captured["entries_long"] = entries_long.copy()
+        return pd.DataFrame(
+            {
+                "Column": ["AAA"],
+                "Entry Timestamp": [pd.Timestamp("2024-01-03")],
+                "Exit Timestamp": [pd.Timestamp("2024-01-05")],
+                "Return": [0.01],
+            }
+        )
+
+    monkeypatch.setattr("earnings_ds.simulations.vectorbt_trade_returns_gapaware", _fake_vbt)
+
+    out = derive_exit_labels_first_touch_approx(
+        X=X,
+        open_df=open_,
+        high_df=high,
+        low_df=low,
+        close_df=close,
+        horizon=2,
+        tp=0.03,
+        sl=0.03,
+        use_illiquidity_gate=True,
+        illiquidity_spread_df=spread,
+    )
+
+    assert captured["entries_long"].at[pd.Timestamp("2024-01-03"), "AAA"]
+    assert not np.isnan(out.loc[("AAA", pd.Timestamp("2024-01-03 16:00")), "y_tp_first"])
+    assert out.loc[("AAA", pd.Timestamp("2024-01-03 16:00")), "trade_ret"] == 0.01

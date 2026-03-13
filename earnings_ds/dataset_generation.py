@@ -1153,11 +1153,17 @@ def derive_exit_labels_first_touch_approx(
 
     # Mandatory vectorbt realization path: use explicit exits derived above so
     # trade outcomes align 1:1 with first-touch approximation labels.
-    from earnings_ds.simulations import vectorbt_trade_returns_gapaware, calculate_agk_spread_proxy
+    from earnings_ds.simulations import (
+        vectorbt_trade_returns_gapaware,
+        calculate_agk_spread_proxy,
+        calculate_past_realized_vol_dollars,
+    )
 
     spread_fn = calculate_agk_spread_proxy if illiquidity_spread_fn is None else illiquidity_spread_fn
     spread_df = None
+    realized_vol_dollars_df = None
     blocked_by_illiquidity: set[tuple[str, pd.Timestamp]] = set()
+    allowed_by_vol_override = 0
     if use_illiquidity_gate:
         spread_df = illiquidity_spread_df
         if spread_df is None:
@@ -1169,6 +1175,10 @@ def derive_exit_labels_first_touch_approx(
                 **(illiquidity_spread_kwargs or {}),
             )
         spread_df = spread_df.reindex_like(close_df)
+        realized_vol_dollars_df = calculate_past_realized_vol_dollars(
+            close_df=close_df,
+            horizon=horizon,
+        ).reindex_like(close_df)
 
     entries_long = pd.DataFrame(False, index=close_df.index, columns=close_df.columns)
     exits_long = pd.DataFrame(False, index=close_df.index, columns=close_df.columns)
@@ -1188,9 +1198,23 @@ def derive_exit_labels_first_touch_approx(
             else:
                 spread_cap = np.nan
             est_spread = spread_df.at[ev_day, tkr] if (ev_day in spread_df.index and tkr in spread_df.columns) else np.nan
-            if pd.notna(est_spread) and pd.notna(spread_cap) and float(est_spread) > float(spread_cap):
+            realized_vol_dollars = np.nan
+            if realized_vol_dollars_df is not None and ev_day in realized_vol_dollars_df.index and tkr in realized_vol_dollars_df.columns:
+                realized_vol_dollars = realized_vol_dollars_df.at[ev_day, tkr]
+
+            regular_gate_pass = True
+            if pd.notna(est_spread) and pd.notna(spread_cap):
+                regular_gate_pass = float(est_spread) <= float(spread_cap)
+
+            vol_gate_pass = False
+            if pd.notna(est_spread) and pd.notna(realized_vol_dollars):
+                vol_gate_pass = float(realized_vol_dollars) > float(est_spread)
+
+            if not (regular_gate_pass or vol_gate_pass):
                 blocked_by_illiquidity.add(row_key)
                 continue
+            if (not regular_gate_pass) and vol_gate_pass:
+                allowed_by_vol_override += 1
 
         entries_long.at[ev_day, tkr] = True
         if np.isfinite(ex_day) and ex_day >= 1:
@@ -1249,4 +1273,5 @@ def derive_exit_labels_first_touch_approx(
         blocked_count = int(sum((tk, pd.Timestamp(ed).normalize()) in blocked_by_illiquidity for tk, ed in zip(tickers, event_day)))
         if debug:
             print(f"[illiquidity gate] blocked events: {blocked_count}")
+            print(f"[illiquidity gate] allowed by vol override: {allowed_by_vol_override}")
     return out
