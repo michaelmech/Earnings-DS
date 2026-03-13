@@ -440,6 +440,7 @@ def run_primary_plus_meta(
 
     spread_df = None
     illiquidity_threshold_by_event = None
+    realized_vol_dollars_df = None
     if use_illiquidity_gate:
         spread_df = illiquidity_spread_df
         if spread_df is None:
@@ -460,6 +461,12 @@ def run_primary_plus_meta(
             .rename('spread_cap')
             .reorder_levels(['ticker', 'event_day'])
         )
+        from .simulations import calculate_past_realized_vol_dollars
+
+        realized_vol_dollars_df = calculate_past_realized_vol_dollars(
+            close_df=px_close,
+            horizon=horizon,
+        ).reindex_like(px_close)
 
     from .simulations import make_event_signal_matrices
 
@@ -471,6 +478,7 @@ def run_primary_plus_meta(
         side_threshold=primary_threshold,
         illiquidity_spread_df=spread_df,
         illiquidity_threshold_by_event=illiquidity_threshold_by_event,
+        realized_vol_dollars_df=realized_vol_dollars_df,
         debug=gate_debug,
     )
 
