@@ -972,6 +972,19 @@ def derive_exit_labels_first_touch_approx(
     min_sl: float = 0.0,
     max_tp: float = np.inf,
     max_sl: float = np.inf,
+
+    # --- vectorbt execution controls (mandatory path) ---
+    volume_df: pd.DataFrame | None = None,
+    use_smart_slippage: bool = True,
+    smart_slippage_kwargs: dict | None = None,
+    use_illiquidity_gate: bool = False,
+    illiquidity_spread_df: pd.DataFrame | None = None,
+    illiquidity_spread_fn=None,
+    illiquidity_spread_kwargs: dict | None = None,
+    weighting: str = "equal",
+    max_trade_size: float = 1.0,
+    debug: bool = False,
+    vectorbt_kwargs: dict | None = None,
 ) -> pd.DataFrame:
 
     if not isinstance(X.index, pd.MultiIndex) or X.index.nlevels < 2:
@@ -1137,4 +1150,103 @@ def derive_exit_labels_first_touch_approx(
     out["exit_code"] = exit_code_list
     out["exit_day"] = exit_day_list
     out["y_tp_first"] = np.where(valid, (out["exit_code"] == 1).astype(float), np.nan)
+
+    # Mandatory vectorbt realization path: use explicit exits derived above so
+    # trade outcomes align 1:1 with first-touch approximation labels.
+    from earnings_ds.simulations import vectorbt_trade_returns_gapaware, calculate_agk_spread_proxy
+
+    spread_fn = calculate_agk_spread_proxy if illiquidity_spread_fn is None else illiquidity_spread_fn
+    spread_df = None
+    blocked_by_illiquidity: set[tuple[str, pd.Timestamp]] = set()
+    if use_illiquidity_gate:
+        spread_df = illiquidity_spread_df
+        if spread_df is None:
+            spread_df = spread_fn(
+                open_df=open_df,
+                high_df=high_df,
+                low_df=low_df,
+                close_df=close_df,
+                **(illiquidity_spread_kwargs or {}),
+            )
+        spread_df = spread_df.reindex_like(close_df)
+
+    entries_long = pd.DataFrame(False, index=close_df.index, columns=close_df.columns)
+    exits_long = pd.DataFrame(False, index=close_df.index, columns=close_df.columns)
+    entries_short = pd.DataFrame(False, index=close_df.index, columns=close_df.columns)
+    exits_short = pd.DataFrame(False, index=close_df.index, columns=close_df.columns)
+
+    for tkr, ev_day, ok, ex_day in zip(tickers, event_day, valid, exit_day_list):
+        if (not ok) or (tkr not in close_df.columns) or (ev_day not in close_df.index):
+            continue
+
+        if use_illiquidity_gate and spread_df is not None:
+            row_key = (tkr, ev_day)
+            # event-specific cap keeps gate consistent with per-event TP logic.
+            evt_sel = (out.index.get_level_values(0) == tkr) & (out["event_day"].to_numpy() == np.datetime64(ev_day))
+            if np.any(evt_sel):
+                spread_cap = float(np.nanmean((out.loc[evt_sel, "tp_used"] * out.loc[evt_sel, "entry_px"]).abs().to_numpy(dtype=float)))
+            else:
+                spread_cap = np.nan
+            est_spread = spread_df.at[ev_day, tkr] if (ev_day in spread_df.index and tkr in spread_df.columns) else np.nan
+            if pd.notna(est_spread) and pd.notna(spread_cap) and float(est_spread) > float(spread_cap):
+                blocked_by_illiquidity.add(row_key)
+                continue
+
+        entries_long.at[ev_day, tkr] = True
+        if np.isfinite(ex_day) and ex_day >= 1:
+            exit_i = int(ex_day)
+        else:
+            exit_i = int(horizon)
+        pos_i = close_df.index.get_loc(ev_day)
+        ex_i = pos_i + exit_i
+        if ex_i < len(close_df.index):
+            exits_long.iat[ex_i, close_df.columns.get_loc(tkr)] = True
+
+    trades = vectorbt_trade_returns_gapaware(
+        open_df=open_df,
+        high_df=high_df,
+        low_df=low_df,
+        close_df=close_df,
+        entries_long=entries_long,
+        exits_long=exits_long,
+        entries_short=entries_short,
+        exits_short=exits_short,
+        volume_df=volume_df,
+        use_smart_slippage=use_smart_slippage,
+        smart_slippage_kwargs=smart_slippage_kwargs,
+        weighting=weighting,
+        max_trade_size=max_trade_size,
+        debug=debug,
+        tp=np.inf,
+        sl=np.inf,
+        **(vectorbt_kwargs or {}),
+    )
+
+    if trades is None or len(trades) == 0:
+        out["trade_ret"] = np.nan
+        return out
+
+    t = trades.copy()
+    t["ticker"] = t["Column"].astype(str)
+    t["event_day"] = pd.to_datetime(t["Entry Timestamp"]).dt.normalize()
+    t["trade_ret"] = t["Return"].astype(float)
+    trade_map = t.groupby(["ticker", "event_day"], as_index=False)["trade_ret"].mean()
+
+    event_df = out.reset_index()
+    event_df["event_day"] = pd.to_datetime(event_df["event_day"]).dt.normalize()
+
+    if blocked_by_illiquidity:
+        blocked_idx = event_df.apply(lambda r: (r["ticker"], r["event_day"]) in blocked_by_illiquidity, axis=1)
+        for col in ["entry_px", "vol_used", "tp_used", "sl_used", "MFE", "MAE", "exit_code", "exit_day", "y_tp_first"]:
+            event_df.loc[blocked_idx, col] = np.nan
+
+    event_df = event_df.merge(trade_map, on=["ticker", "event_day"], how="left")
+    event_df = event_df.set_index(["ticker", "earnings_ts"])
+    for col in ["entry_px", "vol_used", "tp_used", "sl_used", "MFE", "MAE", "exit_code", "exit_day", "y_tp_first"]:
+        out[col] = event_df[col]
+    out["trade_ret"] = event_df["trade_ret"]
+    if blocked_by_illiquidity:
+        blocked_count = int(sum((tk, pd.Timestamp(ed).normalize()) in blocked_by_illiquidity for tk, ed in zip(tickers, event_day)))
+        if debug:
+            print(f"[illiquidity gate] blocked events: {blocked_count}")
     return out
