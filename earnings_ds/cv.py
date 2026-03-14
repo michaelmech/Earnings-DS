@@ -477,6 +477,7 @@ def meta_cvs_composite(
     primary_use_last_fold=False,
     meta_use_last_fold=False,
     return_component_scores=False,
+    return_primary_meta_scores=False,
     min_slippage=None,
     max_slippage=None,
     smart_slippage_kwargs=None,
@@ -629,6 +630,9 @@ def meta_cvs_composite(
         'recall_weight': recall_weight,
         'ap_weight': ap_weight,
     }
+
+  if return_primary_meta_scores:
+    return float(primary_score), float(meta_score)
 
   return composite_score
 

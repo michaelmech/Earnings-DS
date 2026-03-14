@@ -334,6 +334,59 @@ def test_meta_cvs_composite_uses_weighted_average(monkeypatch):
     assert out == 0.25 * 0.6 + 0.75 * 0.8
 
 
+def test_meta_cvs_composite_returns_primary_meta_tuple_when_requested(monkeypatch):
+    X, y, ds, px, tickers = _toy_inputs()
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+    monkeypatch.setattr(cv, "_cv_recall_skill", lambda *args, **kwargs: np.array([0.61]))
+    monkeypatch.setattr(cv, "_cv_average_precision_skill", lambda *args, **kwargs: np.array([0.83]))
+
+    out = cv.meta_cvs_composite(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        return_primary_meta_scores=True,
+    )
+
+    assert out == (0.61, 0.83)
+
+
+def test_meta_cvs_composite_component_scores_take_precedence_over_tuple(monkeypatch):
+    X, y, ds, px, tickers = _toy_inputs()
+
+    def fake_run_primary_plus_meta(*args, **kwargs):
+        return X, y
+
+    monkeypatch.setattr("earnings_ds.meta_labeling.run_primary_plus_meta", fake_run_primary_plus_meta)
+    monkeypatch.setattr(cv, "_cv_recall_skill", lambda *args, **kwargs: np.array([0.55]))
+    monkeypatch.setattr(cv, "_cv_average_precision_skill", lambda *args, **kwargs: np.array([0.75]))
+
+    out = cv.meta_cvs_composite(
+        X,
+        y,
+        ds,
+        close=px,
+        high=px,
+        low=px,
+        open_=px,
+        earnings_tickers=tickers,
+        return_component_scores=True,
+        return_primary_meta_scores=True,
+    )
+
+    assert isinstance(out, dict)
+    assert out["primary_score"] == 0.55
+    assert out["meta_score"] == 0.75
+
+
 def test_meta_cvs_composite_prints_adjusted_distributions(monkeypatch, capsys):
     X, y, ds, px, tickers = _toy_inputs()
 
