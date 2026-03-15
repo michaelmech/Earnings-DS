@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from pathlib import Path
 
 def add_earnings_edge_features(
     df: pd.DataFrame,
@@ -602,10 +603,15 @@ def build_synthetic_earnings_test_dataset(
     anchor: list[str] | None = ["SPY"],
     min_hist_days: int = 120,
     ma_windows: tuple[int, int, int] = (5, 20, 60),
+    save_path: str | Path | None = None,
 ) -> pd.DataFrame:
     """
     One row per ticker, representing features computed as-of the last trading day <= asof.
     Labels are unknown, so y_up and fwd_ret_h are NaN.
+
+    If ``save_path`` is provided, saves the output CSV as:
+      {save_path}/{YYYY-MM-DD}.csv
+    where the filename uses the date component of ``asof``.
     """
 
     anchor = anchor or []
@@ -817,6 +823,13 @@ def build_synthetic_earnings_test_dataset(
         return pd.DataFrame()
 
     data = pd.concat(rows, ignore_index=True).sort_values(["ticker"]).reset_index(drop=True)
+
+    if save_path is not None:
+        save_dir = Path(save_path)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        out_file = save_dir / f"{asof_ts.strftime('%Y-%m-%d')}.csv"
+        data.to_csv(out_file, index=False)
+
     return data
 
 
